@@ -31,6 +31,14 @@ bool init_audio_system()
     return true;
 }
 
+// Microphone passthrough callback
+void mic_passthrough_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
+{
+    if (pInput == NULL || pOutput == NULL)
+        return;
+    memcpy(pOutput, pInput, frameCount * 2 * sizeof(float));
+}
+
 // ================= ROUTING =================
 
 void shutdown_audio_routing()
@@ -55,21 +63,49 @@ bool setup_audio_routing()
 {
     shutdown_audio_routing();
 
-    // speakers
-    ma_engine_config spkConfig = ma_engine_config_init();
-    if (selected_speaker_idx >= 0 && selected_speaker_idx < (int)playbackDeviceCount)
-        spkConfig.pPlaybackDeviceID = &playbackDevices[selected_speaker_idx].id;
+    ma_engine_config configSpk = ma_engine_config_init();
+    if (selected_speaker_idx > 0 &&
+        selected_speaker_idx - 1 < (int)playbackDeviceCount)
+    {
+        configSpk.pPlaybackDeviceID = &playbackDevices[selected_speaker_idx - 1].id;
+    }
 
-    if (ma_engine_init(&spkConfig, &engine_speakers) == MA_SUCCESS)
+    if (ma_engine_init(&configSpk, &engine_speakers) == MA_SUCCESS)
         speakers_engine_initialized = true;
 
-    // virtual
-    ma_engine_config vrtConfig = ma_engine_config_init();
-    if (selected_virtual_idx >= 0 && selected_virtual_idx < (int)playbackDeviceCount)
-        vrtConfig.pPlaybackDeviceID = &playbackDevices[selected_virtual_idx].id;
+    if (selected_virtual_idx > 0 &&
+        selected_virtual_idx - 1 < (int)playbackDeviceCount)
+    {
+        ma_engine_config configVrt = ma_engine_config_init();
+        configVrt.pPlaybackDeviceID = &playbackDevices[selected_virtual_idx - 1].id;
 
-    if (ma_engine_init(&vrtConfig, &engine_virtual) == MA_SUCCESS)
-        virtual_engine_initialized = true;
+        if (ma_engine_init(&configVrt, &engine_virtual) == MA_SUCCESS)
+            virtual_engine_initialized = true;
+    }
+
+    if (selected_mic_idx > 0 &&
+        selected_mic_idx - 1 < (int)captureDeviceCount &&
+        selected_virtual_idx > 0 &&
+        selected_virtual_idx - 1 < (int)playbackDeviceCount)
+    {
+        ma_device_config devConfig =
+            ma_device_config_init(ma_device_type_duplex);
+        devConfig.capture.pDeviceID =
+            &captureDevices[selected_mic_idx - 1].id;
+        devConfig.playback.pDeviceID =
+            &playbackDevices[selected_virtual_idx - 1].id;
+        devConfig.capture.format = ma_format_f32;
+        devConfig.capture.channels = 2;
+        devConfig.playback.format = ma_format_f32;
+        devConfig.playback.channels = 2;
+        devConfig.dataCallback = mic_passthrough_callback;
+
+        if (ma_device_init(&context, &devConfig, &mic_pipe_device) == MA_SUCCESS)
+        {
+            ma_device_start(&mic_pipe_device);
+            mic_device_initialized = true;
+        }
+    }
 
     return true;
 }
@@ -87,30 +123,55 @@ void set_master_volume(float vol)
 
 void play_sound(Sound& sound)
 {
+    if (!sound.overlap_enabled)
+        stop_sound(sound);
+
+    const size_t MAX_VOICES = 8;
+    if (sound.active_voices.size() >= MAX_VOICES)
+        return;
+
     SoundVoice v;
 
     if (speakers_engine_initialized) {
         v.spk = new ma_sound();
         ma_sound_init_from_file(&engine_speakers,
             sound.path.c_str(),
-            MA_SOUND_FLAG_DECODE,
+            0,
             NULL,
             NULL,
             v.spk);
 
         ma_sound_start(v.spk);
+
+        if (sound.trim_enabled) {
+            ma_uint64 total_frames = 0;
+            ma_sound_get_length_in_pcm_frames(v.spk, &total_frames);
+            if (total_frames > 0) {
+                ma_uint64 start = (ma_uint64)(sound.trim_start * total_frames);
+                ma_sound_seek_to_pcm_frame(v.spk, start);
+            }
+        }
     }
 
     if (virtual_engine_initialized) {
         v.vrt = new ma_sound();
         ma_sound_init_from_file(&engine_virtual,
             sound.path.c_str(),
-            MA_SOUND_FLAG_DECODE,
+            0,
             NULL,
             NULL,
             v.vrt);
 
         ma_sound_start(v.vrt);
+
+        if (sound.trim_enabled) {
+            ma_uint64 total_frames = 0;
+            ma_sound_get_length_in_pcm_frames(v.vrt, &total_frames);
+            if (total_frames > 0) {
+                ma_uint64 start = (ma_uint64)(sound.trim_start * total_frames);
+                ma_sound_seek_to_pcm_frame(v.vrt, start);
+            }
+        }
     }
 
     sound.active_voices.push_back(v);
@@ -190,6 +251,10 @@ void load_sounds(const std::string& folder)
             auto s = std::make_unique<Sound>();
             s->name = entry.path().stem().string();
             s->path = path;
+
+            ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
+            if (ma_decoder_init_file(path.c_str(), &cfg, &s->vis_decoder) == MA_SUCCESS)
+                s->vis_ready = true;
 
             sounds.push_back(std::move(s));
         }

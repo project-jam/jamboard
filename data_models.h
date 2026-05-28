@@ -193,6 +193,13 @@ struct Sound {
     unsigned int thumb_tex_id = 0;
     SoundFxChain* fx_chain = nullptr;
     std::vector<SoundVoice> active_voices;
+
+    ~Sound() {
+        if (vis_ready) {
+            ma_decoder_uninit(&vis_decoder);
+            vis_ready = false;
+        }
+    }
 };
 
 // Global State Variables shared across files

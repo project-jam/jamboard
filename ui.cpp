@@ -32,6 +32,7 @@ static char search_filter[128] = "";
 static Sound* pending_delete_sound = nullptr;
 static Sound* renaming_sound = nullptr;
 static char rename_buf[256] = "";
+static bool open_rename_popup = false;
 
 static unsigned int load_texture_from_file(const char* filename) {
     int width, height, channels;
@@ -137,6 +138,7 @@ void draw_ui() {
         init_ui_textures();
         needs_sound_reload = false;
         setup_audio_routing();
+        init_all_sound_fx_chains();
     }
 
     // Update all DSP effect chain parameters in real-time
@@ -162,20 +164,21 @@ void draw_ui() {
             }
 
             if (s->trim_enabled && voice.spk) {
-                float total, current;
-                ma_sound_get_length_in_seconds(voice.spk, &total);
-                ma_sound_get_cursor_in_seconds(voice.spk, &current);
-                if (total > 0 && (current / total) >= s->trim_end) {
-                    if (s->loop_track) {
-                        ma_uint32 sr = ma_engine_get_sample_rate(&engine_speakers);
-                        ma_sound_seek_to_pcm_frame(voice.spk,
-                            (ma_uint64)(s->trim_start * total * sr));
-                        if (voice.vrt)
-                            ma_sound_seek_to_pcm_frame(voice.vrt,
-                                (ma_uint64)(s->trim_start * total * sr));
-                    } else {
-                        ma_sound_stop(voice.spk);
-                        if (voice.vrt) ma_sound_stop(voice.vrt);
+                ma_uint64 cur_frame = 0, tot_frames = 0;
+                ma_sound_get_cursor_in_pcm_frames(voice.spk, &cur_frame);
+                ma_sound_get_length_in_pcm_frames(voice.spk, &tot_frames);
+                if (tot_frames > 0) {
+                    double progress = (double)cur_frame / (double)tot_frames;
+                    if (progress >= (double)s->trim_end) {
+                        if (s->loop_track) {
+                            ma_uint64 start = (ma_uint64)(s->trim_start * tot_frames);
+                            ma_sound_seek_to_pcm_frame(voice.spk, start);
+                            if (voice.vrt)
+                                ma_sound_seek_to_pcm_frame(voice.vrt, start);
+                        } else {
+                            ma_sound_stop(voice.spk);
+                            if (voice.vrt) ma_sound_stop(voice.vrt);
+                        }
                     }
                 }
             }
@@ -264,10 +267,20 @@ void draw_ui() {
                 if (ImGui::Checkbox("Enable Trimmer", &tr)) { s.trim_enabled = tr; save_config_to_json(); }
                 if (s.trim_enabled) {
                     ImGui::SetNextItemWidth(-1);
-                    if (ImGui::SliderFloat("Start", &s.trim_start, 0.0f, s.trim_end)) {}
+                    if (ImGui::SliderFloat("Start", &s.trim_start, 0.0f, s.trim_end)) {
+                        if (s.vis_ready) {
+                            ma_uint64 tot = s.vis_decoder.outputSampleRate * 2;
+                            s.trim_start = (float)((ma_uint64)(s.trim_start * tot)) / (float)tot;
+                        }
+                    }
                     if (ImGui::IsItemDeactivatedAfterEdit()) save_config_to_json();
                     ImGui::SetNextItemWidth(-1);
-                    if (ImGui::SliderFloat("End", &s.trim_end, s.trim_start, 1.0f)) {}
+                    if (ImGui::SliderFloat("End", &s.trim_end, s.trim_start, 1.0f)) {
+                        if (s.vis_ready) {
+                            ma_uint64 tot = s.vis_decoder.outputSampleRate * 2;
+                            s.trim_end = (float)((ma_uint64)(s.trim_end * tot)) / (float)tot;
+                        }
+                    }
                     if (ImGui::IsItemDeactivatedAfterEdit()) save_config_to_json();
                 }
 
@@ -338,36 +351,28 @@ void draw_ui() {
                     ImGui::TableNextColumn();
                     if (skip) continue;
 
-                    // --- Top row: Mute + mini-volume ---
-                    {
-                        ImGui::PushID(s.get());
-                        ImVec4 col = s->muted
-                            ? ImVec4(1, 0.3f, 0.3f, 1)
-                            : ImVec4(0.3f, 1, 0.3f, 1);
-                        ImGui::PushStyleColor(ImGuiCol_Text, col);
-                        const char* icon = s->muted ? "MUT" : "ON";
-                        if (ImGui::SmallButton(icon)) {
-                            s->muted = !s->muted;
-                            save_config_to_json();
-                        }
-                        ImGui::PopStyleColor();
-
-                        ImGui::SameLine();
-                        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 4);
-                        float v = s->volume_amp;
-                        if (ImGui::SliderFloat("##gv", &v, 0.0f, 1.5f, "", 1.0f)) {
-                            s->volume_amp = v;
-                        }
-                        if (ImGui::IsItemDeactivatedAfterEdit()) save_config_to_json();
-                        ImGui::PopID();
-                    }
-
                     // --- Sound button ---
-                    std::string label = s->name;
+                    ImGui::PushID(s.get());
+
+                    std::string display = s->name;
+                    std::string hotkey_str;
                     if (s->hotkey >= 0) {
                         const char* kn = glfwGetKeyName(s->hotkey, 0);
-                        if (kn) { label += " ["; label += kn; label += "]"; }
+                        if (kn) { hotkey_str = " ["; hotkey_str += kn; hotkey_str += "]"; }
                     }
+
+                    float btn_w = ImGui::GetContentRegionAvail().x;
+                    float text_max = btn_w - ImGui::GetStyle().FramePadding.x * 2.0f;
+                    float ellipsis_w = ImGui::CalcTextSize("...").x;
+                    float suffix_w = ImGui::CalcTextSize(hotkey_str.c_str()).x;
+                    float name_max = text_max - suffix_w;
+
+                    if (name_max > 0 && ImGui::CalcTextSize(display.c_str()).x + ellipsis_w > name_max) {
+                        while (!display.empty() && ImGui::CalcTextSize(display.c_str()).x + ellipsis_w > name_max)
+                            display.pop_back();
+                        display += "...";
+                    }
+                    std::string label = display + hotkey_str;
 
                     bool is_playing = !s->active_voices.empty();
                     bool is_sel = (current_selected_sound == s.get());
@@ -398,7 +403,7 @@ void draw_ui() {
                         if (ImGui::MenuItem("Rename")) {
                             renaming_sound = s.get();
                             strncpy(rename_buf, s->name.c_str(), sizeof(rename_buf) - 1);
-                            ImGui::OpenPopup("Rename Sound");
+                            open_rename_popup = true;
                         }
                         if (ImGui::MenuItem("Play")) { play_sound(*s); }
                         if (ImGui::MenuItem("Stop")) { stop_sound(*s); }
@@ -416,6 +421,7 @@ void draw_ui() {
                         }
                         ImGui::EndPopup();
                     }
+                    ImGui::PopID();
                 }
                 ImGui::EndTable();
             }
@@ -1008,24 +1014,45 @@ void draw_ui() {
             if (ImGui::Combo("Primary Output (Your Headphones)",
                 &selected_speaker_idx,
                 [](void*, int idx) -> const char* {
+                    static char buf[512];
                     if (idx == 0) return "Default Windows Playback Device";
-                    return playbackDevices[idx - 1].name;
+                    int dev = idx - 1;
+                    if (dev >= (int)playbackDeviceCount) return "?";
+                    if (playbackDevices[dev].isDefault)
+                        snprintf(buf, sizeof(buf), "%s [System Default]", playbackDevices[dev].name);
+                    else
+                        snprintf(buf, sizeof(buf), "%s", playbackDevices[dev].name);
+                    return buf;
                 }, nullptr, playbackDeviceCount + 1)) {}
 
             ImGui::SetNextItemWidth(400);
-            if (ImGui::Combo("Secondary Output (Discord Virtual Cable)",
+            if (ImGui::Combo("Secondary Output (Virtual Cable)",
                 &selected_virtual_idx,
                 [](void*, int idx) -> const char* {
+                    static char buf[512];
                     if (idx == 0) return "[Disabled] Do Not Route to Virtual Input";
-                    return playbackDevices[idx - 1].name;
+                    int dev = idx - 1;
+                    if (dev >= (int)playbackDeviceCount) return "?";
+                    if (playbackDevices[dev].isDefault)
+                        snprintf(buf, sizeof(buf), "%s [System Default]", playbackDevices[dev].name);
+                    else
+                        snprintf(buf, sizeof(buf), "%s", playbackDevices[dev].name);
+                    return buf;
                 }, nullptr, playbackDeviceCount + 1)) {}
 
             ImGui::SetNextItemWidth(400);
-            if (ImGui::Combo("Microphone Passthrough Input",
+            if (ImGui::Combo("Microphone Input (Passthrough to Virtual Cable)",
                 &selected_mic_idx,
                 [](void*, int idx) -> const char* {
+                    static char buf[512];
                     if (idx == 0) return "[Disabled] Do Not Inject Microphone";
-                    return captureDevices[idx - 1].name;
+                    int dev = idx - 1;
+                    if (dev >= (int)captureDeviceCount) return "?";
+                    if (captureDevices[dev].isDefault)
+                        snprintf(buf, sizeof(buf), "%s [System Default]", captureDevices[dev].name);
+                    else
+                        snprintf(buf, sizeof(buf), "%s", captureDevices[dev].name);
+                    return buf;
                 }, nullptr, captureDeviceCount + 1)) {}
 
             ImGui::Spacing();
@@ -1042,7 +1069,11 @@ void draw_ui() {
         ImGui::EndTabBar();
     }
 
-    // Rename Sound popup
+    // Rename Sound popup — open deferred (safe, outside any popup scope)
+    if (open_rename_popup) {
+        ImGui::OpenPopup("Rename Sound");
+        open_rename_popup = false;
+    }
     if (renaming_sound && ImGui::BeginPopupModal("Rename Sound", NULL, ImGuiWindowFlags_AlwaysAutoResize))
     {
         ImGui::Text("Enter new name for \"%s\":", renaming_sound->name.c_str());

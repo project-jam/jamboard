@@ -7,6 +7,8 @@
 #include <iostream>
 #include <cstring>
 #include <GL/gl.h>
+#include <chrono>
+#include <thread>
 
 ma_context context;
 ma_device_info* playbackDevices = nullptr;
@@ -93,11 +95,15 @@ bool setup_audio_routing()
 {
     std::cout << "--- Applying Audio Routing ---" << std::endl;
 
-    // CRITICAL FIX: Stop all sounds BEFORE shutting down engines
-    // This prevents deadlocks when uninitializing engines with active playback
+    // CRITICAL FIX: Stop all sounds AND wait for engines to finish processing
+    // This prevents thread synchronization issues and deadlocks
     for (auto& s : sounds) {
         stop_sound(*s);
     }
+    
+    // Give the audio engines time to finish their current audio processing cycle
+    // This is critical to avoid deadlock between UI thread and audio processing threads
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
     shutdown_audio_routing();
 

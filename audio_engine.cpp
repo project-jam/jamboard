@@ -93,6 +93,12 @@ bool setup_audio_routing()
 {
     std::cout << "--- Applying Audio Routing ---" << std::endl;
 
+    // CRITICAL FIX: Stop all sounds BEFORE shutting down engines
+    // This prevents deadlocks when uninitializing engines with active playback
+    for (auto& s : sounds) {
+        stop_sound(*s);
+    }
+
     shutdown_audio_routing();
 
     // =========================================================

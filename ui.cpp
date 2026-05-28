@@ -130,12 +130,13 @@ void draw_ui() {
         g_capturing_hotkey_sound = nullptr;
         current_selected_sound = nullptr;
         destroy_all_sound_fx_chains();
+        shutdown_audio_routing();
         sounds.clear();
         load_sounds("sounds");
         load_config_from_json();
         init_ui_textures();
         needs_sound_reload = false;
-        init_all_sound_fx_chains();
+        setup_audio_routing();
     }
 
     // Update all DSP effect chain parameters in real-time
@@ -993,8 +994,8 @@ void draw_ui() {
         // TAB 4: SETTINGS
         // ==========================================
         if (ImGui::BeginTabItem("Settings")) {
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f),
-                "Warning: Engine will reboot to apply new hardware paths.");
+            ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f),
+                "Changes below apply after clicking \"Apply Hardware Routing Changes\".");
             ImGui::Spacing();
 
             ImGui::SetNextItemWidth(400);

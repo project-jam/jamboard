@@ -11,6 +11,7 @@
 #include "ui.h"
 #include "import.h"
 
+#include <iostream>
 #include <vector>
 #include <string>
 
@@ -30,7 +31,9 @@ int main() {
 
     load_sounds("sounds");
     load_config_from_json();
-    setup_audio_routing();
+    if (!setup_audio_routing()) {
+        std::cerr << "FATAL: No audio output engines initialized. Sound will not play." << std::endl;
+    }
     init_all_sound_fx_chains();
 
     if (!glfwInit()) return -1;

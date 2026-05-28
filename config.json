@@ -683,7 +683,7 @@
             "trim_enabled": false,
             "trim_end": 1.0,
             "trim_start": 0.0,
-            "volume_amp": 0.3199999928474426,
+            "volume_amp": 0.14000016450881958,
             "web_url": ""
         },
         "are-you-coming-to-the-tree": {
@@ -1046,7 +1046,7 @@
                 "phaser_feedback": 0.5,
                 "phaser_rate": 0.5,
                 "pitch_semitones": 0.0,
-                "playback_speed": 0.4399999976158142,
+                "playback_speed": 1.0,
                 "reverb_damping": 0.20000000298023224,
                 "reverb_room_size": 0.5,
                 "reverb_wet": 0.30000001192092896,

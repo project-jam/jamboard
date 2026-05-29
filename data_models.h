@@ -220,3 +220,4 @@ extern Sound* g_capturing_hotkey_sound;
 extern bool mic_muted;
 extern bool virtual_muted;
 extern bool deafen;
+extern bool program_files_mode;

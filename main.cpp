@@ -14,6 +14,9 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <fstream>
+#include <filesystem>
+#include <cstdlib>
 
 static bool prev_keys[512] = {};
 GLFWwindow* g_window = nullptr;
@@ -27,6 +30,30 @@ void drop_callback(GLFWwindow* window, int count, const char** paths)
 }
 
 int main() {
+#ifdef _WIN32
+    // If sounds/ isn't writable (e.g. installed in Program Files), use AppData
+    auto writable = [](const std::string& dir) -> bool {
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (ec) return false;
+        std::string test = dir + "\\__w_test";
+        std::ofstream tf(test);
+        if (!tf.is_open()) return false;
+        tf.close();
+        std::filesystem::remove(test, ec);
+        return true;
+    };
+    if (!writable("sounds")) {
+        char* appdata = getenv("APPDATA");
+        if (appdata) {
+            std::string dir = std::string(appdata) + "\\JamBoard";
+            std::filesystem::create_directories(dir + "\\sounds");
+            std::filesystem::current_path(dir);
+            program_files_mode = true;
+        }
+    }
+#endif
+
     if (!init_audio_system()) return -1;
 
     load_sounds("sounds");

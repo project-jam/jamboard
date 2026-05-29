@@ -37,3 +37,4 @@ Sound* current_selected_sound = nullptr;
 bool mic_muted = false;
 bool virtual_muted = false;
 bool deafen = false;
+bool program_files_mode = false;

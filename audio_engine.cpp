@@ -198,6 +198,7 @@ void play_sound(Sound& sound)
         }
     }
 
+    v.play_start = std::chrono::steady_clock::now();
     sound.active_voices.push_back(v);
 }
 

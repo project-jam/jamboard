@@ -1,6 +1,7 @@
 [Setup]
 AppName=JamBoard
 AppVersion=2.0
+AppPublisher=Project Jam
 DefaultDirName={autopf}\JamBoard
 DefaultGroupName=JamBoard
 UninstallDisplayIcon={app}\jamboard.exe

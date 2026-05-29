@@ -17,6 +17,7 @@ void save_config_to_json() {
     j["hardware"]["virtual_muted"] = virtual_muted;
     j["hardware"]["deafen"] = deafen;
     j["hardware"]["program_files"] = program_files_mode;
+    j["hardware"]["scrub_enabled"] = scrub_enabled;
 
     for (const auto& s : sounds) {
         json sj;
@@ -155,6 +156,7 @@ void load_config_from_json() {
         virtual_muted = j["hardware"].value("virtual_muted", false);
         deafen = j["hardware"].value("deafen", false);
         program_files_mode = j["hardware"].value("program_files", false);
+        scrub_enabled = j["hardware"].value("scrub_enabled", false);
     }
 
     if (j.contains("profiles")) {

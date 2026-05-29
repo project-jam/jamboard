@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <chrono>
 #include "miniaudio.h"
 
 enum PlayMode {
@@ -136,6 +137,7 @@ struct SoundEffectsState {
 struct SoundVoice {
     ma_sound* spk = nullptr;
     ma_sound* vrt = nullptr;
+    std::chrono::steady_clock::time_point play_start;
 };
 
 struct SoundFxChain {
@@ -221,3 +223,4 @@ extern bool mic_muted;
 extern bool virtual_muted;
 extern bool deafen;
 extern bool program_files_mode;
+extern bool scrub_enabled;

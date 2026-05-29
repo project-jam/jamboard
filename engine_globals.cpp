@@ -38,3 +38,4 @@ bool mic_muted = false;
 bool virtual_muted = false;
 bool deafen = false;
 bool program_files_mode = false;
+bool scrub_enabled = false;

@@ -247,14 +247,7 @@ void draw_ui() {
                 if (ImGui::IsItemDeactivatedAfterEdit()) save_config_to_json();
                 CenterBtn("##cp", &s.fx.pan, 0.0f);
 
-                // Duration info
-                if (!s.active_voices.empty() && s.active_voices.back().spk) {
-                    float cur, tot;
-                    ma_sound_get_cursor_in_seconds(s.active_voices.back().spk, &cur);
-                    ma_sound_get_length_in_seconds(s.active_voices.back().spk, &tot);
-                    ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1), "%s / %s",
-                        fmt_time(cur).c_str(), fmt_time(tot).c_str());
-                }
+                // Duration info removed
 
                 ImGui::Separator();
 
@@ -279,16 +272,28 @@ void draw_ui() {
                 bool tr = s.trim_enabled;
                 if (ImGui::Checkbox("Enable Trimmer", &tr)) { s.trim_enabled = tr; save_config_to_json(); }
                 if (s.trim_enabled) {
+                    float tot_sec = 0;
+                    if (s.vis_ready) {
+                        ma_uint64 df;
+                        if (ma_decoder_get_length_in_pcm_frames(&s.vis_decoder, &df) == MA_SUCCESS)
+                            tot_sec = (float)df / (float)s.vis_decoder.outputSampleRate;
+                    }
+
+                    ImGui::Text("Start: %.0f%%", s.trim_start * 100.0f);
+                    if (tot_sec > 0) { ImGui::SameLine(); ImGui::TextDisabled("(%s)", fmt_time(s.trim_start * tot_sec).c_str()); }
                     ImGui::SetNextItemWidth(-1);
-                    if (ImGui::SliderFloat("##TrimStart", &s.trim_start, 0.0f, s.trim_end, "%.0f%%")) {
+                    if (ImGui::SliderFloat("##TrimStart", &s.trim_start, 0.0f, s.trim_end, "")) {
                         if (s.vis_ready) {
                             ma_uint64 tot = s.vis_decoder.outputSampleRate * 2;
                             s.trim_start = (float)((ma_uint64)(s.trim_start * tot)) / (float)tot;
                         }
                     }
                     if (ImGui::IsItemDeactivatedAfterEdit()) save_config_to_json();
+
+                    ImGui::Text("End: %.0f%%", s.trim_end * 100.0f);
+                    if (tot_sec > 0) { ImGui::SameLine(); ImGui::TextDisabled("(%s)", fmt_time(s.trim_end * tot_sec).c_str()); }
                     ImGui::SetNextItemWidth(-1);
-                    if (ImGui::SliderFloat("##TrimEnd", &s.trim_end, s.trim_start, 1.0f, "%.0f%%")) {
+                    if (ImGui::SliderFloat("##TrimEnd", &s.trim_end, s.trim_start, 1.0f, "")) {
                         if (s.vis_ready) {
                             ma_uint64 tot = s.vis_decoder.outputSampleRate * 2;
                             s.trim_end = (float)((ma_uint64)(s.trim_end * tot)) / (float)tot;
@@ -483,8 +488,11 @@ void draw_ui() {
 
                     float v_cur = 0.0f, v_tot = 0.0f;
                     if (voice.spk) {
-                        ma_sound_get_cursor_in_seconds(voice.spk, &v_cur);
-                        ma_sound_get_length_in_seconds(voice.spk, &v_tot);
+                        auto el = std::chrono::steady_clock::now() - voice.play_start;
+                        v_cur = std::chrono::duration<float>(el).count() * s->fx.playback_speed;
+                        ma_uint64 pf = 0;
+                        if (ma_sound_get_length_in_pcm_frames(voice.spk, &pf) == MA_SUCCESS && pf > 0)
+                            v_tot = (float)pf / (float)ma_engine_get_sample_rate(&engine_speakers);
                     }
 
                     // Clickable name — selects sound without playing
@@ -550,9 +558,21 @@ void draw_ui() {
                 !current_selected_sound->active_voices.empty())
                 ? current_selected_sound->active_voices.back().spk : nullptr;
 
-            if (tv) {
-                ma_sound_get_cursor_in_seconds(tv, &cur_sec);
-                ma_sound_get_length_in_seconds(tv, &tot_sec);
+            if (tv && current_selected_sound) {
+                auto& voice = current_selected_sound->active_voices.back();
+                auto elapsed = std::chrono::steady_clock::now() - voice.play_start;
+                cur_sec = std::chrono::duration<float>(elapsed).count()
+                    * current_selected_sound->fx.playback_speed;
+                ma_uint64 tf = 0;
+                if (ma_sound_get_length_in_pcm_frames(tv, &tf) == MA_SUCCESS && tf > 0) {
+                    float sr = (float)ma_engine_get_sample_rate(&engine_speakers);
+                    tot_sec = (float)tf / sr;
+                } else if (current_selected_sound->vis_ready) {
+                    ma_uint64 df;
+                    if (ma_decoder_get_length_in_pcm_frames(
+                            &current_selected_sound->vis_decoder, &df) == MA_SUCCESS && df > 0)
+                        tot_sec = (float)df / (float)current_selected_sound->vis_decoder.outputSampleRate;
+                }
                 if (tot_sec > 0.0f) current_progress = cur_sec / tot_sec;
             }
 
@@ -561,17 +581,45 @@ void draw_ui() {
             if (seek_cooldown_frames > 0) seek_cooldown_frames--;
 
             ImGui::SetNextItemWidth(-1);
-            if (ImGui::SliderFloat("##MasterSeek", &user_drag_progress, 0.0f, 1.0f,
-                "Selected Track Timeline"))
+            ImGui::SliderFloat("##MasterSeek", &user_drag_progress, 0.0f, 1.0f,
+                "Selected Track Timeline");
+
+            if (ImGui::IsItemActive()) {
                 is_user_dragging_slider = true;
-            if (ImGui::IsItemDeactivatedAfterEdit() && tv) {
-                ma_uint32 sr = ma_engine_get_sample_rate(&engine_speakers);
-                ma_uint64 target = (ma_uint64)(user_drag_progress * tot_sec * sr);
-                ma_sound_seek_to_pcm_frame(
-                    current_selected_sound->active_voices.back().spk, target);
-                if (current_selected_sound->active_voices.back().vrt)
+                if (scrub_enabled && tv && current_selected_sound) {
+                    ma_uint64 total_frames = 0;
+                    if (ma_sound_get_length_in_pcm_frames(tv, &total_frames) == MA_SUCCESS) {
+                        ma_uint64 target = (ma_uint64)(user_drag_progress * total_frames);
+                        ma_sound_seek_to_pcm_frame(
+                            current_selected_sound->active_voices.back().spk, target);
+                        if (current_selected_sound->active_voices.back().vrt)
+                            ma_sound_seek_to_pcm_frame(
+                                current_selected_sound->active_voices.back().vrt, target);
+                        float sr = (float)ma_engine_get_sample_rate(&engine_speakers);
+                        float spd = current_selected_sound->fx.playback_speed;
+                        current_selected_sound->active_voices.back().play_start =
+                            std::chrono::steady_clock::now()
+                            - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                std::chrono::duration<float>((float)target / sr / spd));
+                    }
+                }
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && tv && current_selected_sound) {
+                ma_uint64 total_frames = 0;
+                if (ma_sound_get_length_in_pcm_frames(tv, &total_frames) == MA_SUCCESS) {
+                    ma_uint64 target = (ma_uint64)(user_drag_progress * total_frames);
                     ma_sound_seek_to_pcm_frame(
-                        current_selected_sound->active_voices.back().vrt, target);
+                        current_selected_sound->active_voices.back().spk, target);
+                    if (current_selected_sound->active_voices.back().vrt)
+                        ma_sound_seek_to_pcm_frame(
+                            current_selected_sound->active_voices.back().vrt, target);
+                    float sr = (float)ma_engine_get_sample_rate(&engine_speakers);
+                    float spd = current_selected_sound->fx.playback_speed;
+                    current_selected_sound->active_voices.back().play_start =
+                        std::chrono::steady_clock::now()
+                        - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                            std::chrono::duration<float>((float)target / sr / spd));
+                }
                 seek_cooldown_frames = 5;
                 is_user_dragging_slider = false;
             }
@@ -1119,6 +1167,16 @@ void draw_ui() {
             bool virt_m = virtual_muted;
             if (ImGui::Checkbox("Mute Virtual Output", &virt_m)) {
                 set_virtual_muted(virt_m);
+                save_config_to_json();
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            bool scr = scrub_enabled;
+            if (ImGui::Checkbox("Real-time Scrubber (seek while dragging timeline)", &scr)) {
+                scrub_enabled = scr;
                 save_config_to_json();
             }
 

@@ -30,6 +30,9 @@ void toggle_pause_sound(Sound& sound);
 bool is_sound_playing(Sound& sound);
 void clean_sound_voices(Sound& sound);
 void set_master_volume(float vol);
+void apply_volumes();
+void set_deafen(bool on);
+void set_virtual_muted(bool on);
 void delete_sound(Sound* sound);
 void rename_sound(Sound* sound, const std::string& new_name);
 

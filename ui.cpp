@@ -6,11 +6,19 @@
 
 #include "ui.h"
 #include "audio_engine.h"
+#include "import_ffmpeg.h"
 #include "config.h"
 #include "imgui.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#include <commdlg.h>
+#endif
+
 #include <GL/gl.h>
 
 #include <cstdlib>
@@ -53,9 +61,14 @@ static unsigned int load_texture_from_file(const char* filename) {
 
 void init_ui_textures() {
     for (auto& s : sounds) {
-        std::string img_path = "sounds/" + s->name + ".jpg";
-        if (std::filesystem::exists(img_path))
-            s->thumb_tex_id = load_texture_from_file(img_path.c_str());
+        std::string base = "sounds/" + s->name;
+        for (auto ext : { ".ppm", ".jpg", ".jpeg", ".png", ".bmp", ".tga" }) {
+            std::string img_path = base + ext;
+            if (std::filesystem::exists(img_path)) {
+                s->thumb_tex_id = load_texture_from_file(img_path.c_str());
+                break;
+            }
+        }
     }
 }
 
@@ -267,7 +280,7 @@ void draw_ui() {
                 if (ImGui::Checkbox("Enable Trimmer", &tr)) { s.trim_enabled = tr; save_config_to_json(); }
                 if (s.trim_enabled) {
                     ImGui::SetNextItemWidth(-1);
-                    if (ImGui::SliderFloat("Start", &s.trim_start, 0.0f, s.trim_end)) {
+                    if (ImGui::SliderFloat("##TrimStart", &s.trim_start, 0.0f, s.trim_end, "%.0f%%")) {
                         if (s.vis_ready) {
                             ma_uint64 tot = s.vis_decoder.outputSampleRate * 2;
                             s.trim_start = (float)((ma_uint64)(s.trim_start * tot)) / (float)tot;
@@ -275,7 +288,7 @@ void draw_ui() {
                     }
                     if (ImGui::IsItemDeactivatedAfterEdit()) save_config_to_json();
                     ImGui::SetNextItemWidth(-1);
-                    if (ImGui::SliderFloat("End", &s.trim_end, s.trim_start, 1.0f)) {
+                    if (ImGui::SliderFloat("##TrimEnd", &s.trim_end, s.trim_start, 1.0f, "%.0f%%")) {
                         if (s.vis_ready) {
                             ma_uint64 tot = s.vis_decoder.outputSampleRate * 2;
                             s.trim_end = (float)((ma_uint64)(s.trim_end * tot)) / (float)tot;
@@ -407,6 +420,34 @@ void draw_ui() {
                         }
                         if (ImGui::MenuItem("Play")) { play_sound(*s); }
                         if (ImGui::MenuItem("Stop")) { stop_sound(*s); }
+                        if (ImGui::MenuItem("Set Artwork...")) {
+                            char filename[MAX_PATH] = {};
+                            OPENFILENAMEA ofn = {};
+                            ofn.lStructSize = sizeof(ofn);
+                            ofn.hwndOwner = NULL;
+                            ofn.lpstrFilter = "Image Files\0*.jpg;*.jpeg;*.png;*.bmp;*.tga;*.ppm\0All Files\0*.*\0";
+                            ofn.lpstrFile = filename;
+                            ofn.nMaxFile = MAX_PATH;
+                            ofn.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+                            if (GetOpenFileNameA(&ofn)) {
+                                std::string ext = std::filesystem::path(filename).extension().string();
+                                std::string dest = "sounds/" + s->name + ext;
+                                std::filesystem::copy_file(filename, dest, std::filesystem::copy_options::overwrite_existing);
+                                if (s->thumb_tex_id != 0) {
+                                    glDeleteTextures(1, &s->thumb_tex_id);
+                                    s->thumb_tex_id = 0;
+                                }
+                                s->thumb_tex_id = load_texture_from_file(dest.c_str());
+                            }
+                        }
+                        if (s->thumb_tex_id != 0 && ImGui::MenuItem("Remove Artwork")) {
+                            glDeleteTextures(1, &s->thumb_tex_id);
+                            s->thumb_tex_id = 0;
+                            for (auto ext : { ".ppm", ".jpg", ".jpeg", ".png", ".bmp", ".tga" }) {
+                                std::error_code ec;
+                                std::filesystem::remove("sounds/" + s->name + ext, ec);
+                            }
+                        }
                         ImGui::Separator();
                         bool m = s->muted;
                         if (ImGui::MenuItem("Mute", nullptr, &m)) {
@@ -492,6 +533,17 @@ void draw_ui() {
             ImGui::SameLine();
             if (ImGui::Checkbox("Stop others on play", &stop_all_on_new_play))
                 save_config_to_json();
+            ImGui::SameLine();
+            ImGui::Spacing(); ImGui::SameLine();
+            bool is_deafened = deafen;
+            if (is_deafened)
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.1f, 0.1f, 1));
+            if (ImGui::Button(deafen ? "DEAFENED" : "DEAFEN", ImVec2(120, 28))) {
+                set_deafen(!deafen);
+                save_config_to_json();
+            }
+            if (is_deafened)
+                ImGui::PopStyleColor();
 
             float cur_sec = 0.0f, tot_sec = 0.0f, current_progress = 0.0f;
             ma_sound* tv = (current_selected_sound &&
@@ -982,8 +1034,8 @@ void draw_ui() {
                     is_converting = true;
                     std::thread([p]() {
                         std::string b = std::filesystem::path(p).stem().string();
-                        system(("ffmpeg -i \"" + p + "\" -q:a 0 -map a \"sounds/" + b + ".mp3\" -y > NUL 2>&1").c_str());
-                        system(("ffmpeg -i \"" + p + "\" -vframes 1 \"sounds/" + b + ".jpg\" -y > NUL 2>&1").c_str());
+                        ffmpeg_convert_audio(p, "sounds/" + b + ".wav");
+                        ffmpeg_extract_thumbnail(p, "sounds/" + b + ".ppm");
                         is_converting = false;
                         needs_sound_reload = true;
                     }).detach();
@@ -1054,6 +1106,21 @@ void draw_ui() {
                         snprintf(buf, sizeof(buf), "%s", captureDevices[dev].name);
                     return buf;
                 }, nullptr, captureDeviceCount + 1)) {}
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            bool mic_m = mic_muted;
+            if (ImGui::Checkbox("Mute Microphone (Passthrough)", &mic_m)) {
+                mic_muted = mic_m;
+                save_config_to_json();
+            }
+            bool virt_m = virtual_muted;
+            if (ImGui::Checkbox("Mute Virtual Output", &virt_m)) {
+                set_virtual_muted(virt_m);
+                save_config_to_json();
+            }
 
             ImGui::Spacing();
             ImGui::Separator();

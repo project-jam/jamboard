@@ -33,3 +33,7 @@ Sound* g_capturing_hotkey_sound = nullptr;
 
 float master_volume = 1.0f;
 Sound* current_selected_sound = nullptr;
+
+bool mic_muted = false;
+bool virtual_muted = false;
+bool deafen = false;

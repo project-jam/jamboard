@@ -1,17 +1,15 @@
 #include "import.h"
+#include "import_ffmpeg.h"
 #include "data_models.h"
 #include <filesystem>
 #include <thread>
-#include <cstdlib>
 #include <algorithm>
 
 void convert_media(const std::string& path)
 {
     std::string stem = std::filesystem::path(path).stem().string();
-    std::string cmd_audio = "ffmpeg -i \"" + path + "\" -q:a 0 -map a \"sounds/" + stem + ".mp3\" -y > NUL 2>&1";
-    std::string cmd_img = "ffmpeg -i \"" + path + "\" -vframes 1 \"sounds/" + stem + ".jpg\" -y > NUL 2>&1";
-    system(cmd_audio.c_str());
-    system(cmd_img.c_str());
+    ffmpeg_convert_audio(path, "sounds/" + stem + ".wav");
+    ffmpeg_extract_thumbnail(path, "sounds/" + stem + ".ppm");
 }
 
 void handle_dropped_files(const std::vector<std::string>& paths)

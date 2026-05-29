@@ -34,13 +34,14 @@ int main() {
     if (!setup_audio_routing()) {
         std::cerr << "FATAL: No audio output engines initialized. Sound will not play." << std::endl;
     }
+    apply_volumes();
     init_all_sound_fx_chains();
 
     if (!glfwInit()) return -1;
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
-    g_window = glfwCreateWindow(900, 650, "JamBoard Studio", NULL, NULL);
+    g_window = glfwCreateWindow(900, 650, "JamBoard", NULL, NULL);
     if (!g_window) { glfwTerminate(); return -1; }
 
     glfwMakeContextCurrent(g_window);
@@ -57,8 +58,21 @@ int main() {
 
     init_ui_textures();
 
+    const int DEAFEN_KEY = GLFW_KEY_F13;
+    static bool prev_deafen_key = false;
+
     while (!glfwWindowShouldClose(g_window)) {
         glfwPollEvents();
+
+        // Deafen toggle hotkey
+        {
+            bool held = glfwGetKey(g_window, DEAFEN_KEY) == GLFW_PRESS;
+            if (held && !prev_deafen_key) {
+                set_deafen(!deafen);
+                save_config_to_json();
+            }
+            prev_deafen_key = held;
+        }
 
         if (g_capturing_hotkey_sound) {
             for (int k = GLFW_KEY_SPACE; k < GLFW_KEY_LAST; k++) {

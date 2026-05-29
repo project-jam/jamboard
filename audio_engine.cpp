@@ -1,5 +1,6 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "audio_engine.h"
+#include "config.h"
 #include <iostream>
 #include <cstring>
 #include <algorithm>
@@ -36,7 +37,11 @@ void mic_passthrough_callback(ma_device* pDevice, void* pOutput, const void* pIn
 {
     if (pInput == NULL || pOutput == NULL)
         return;
-    memcpy(pOutput, pInput, frameCount * 2 * sizeof(float));
+    if (mic_muted) {
+        memset(pOutput, 0, frameCount * 2 * sizeof(float));
+    } else {
+        memcpy(pOutput, pInput, frameCount * 2 * sizeof(float));
+    }
 }
 
 // ================= ROUTING =================
@@ -110,13 +115,32 @@ bool setup_audio_routing()
     return true;
 }
 
+void apply_volumes()
+{
+    float spk_vol = deafen ? 0.0f : master_volume;
+    float vrt_vol = (deafen || virtual_muted) ? 0.0f : master_volume;
+    if (speakers_engine_initialized)
+        ma_engine_set_volume(&engine_speakers, spk_vol);
+    if (virtual_engine_initialized)
+        ma_engine_set_volume(&engine_virtual, vrt_vol);
+}
+
 void set_master_volume(float vol)
 {
     master_volume = vol;
-    if (speakers_engine_initialized)
-        ma_engine_set_volume(&engine_speakers, vol);
-    if (virtual_engine_initialized)
-        ma_engine_set_volume(&engine_virtual, vol);
+    apply_volumes();
+}
+
+void set_deafen(bool on)
+{
+    deafen = on;
+    apply_volumes();
+}
+
+void set_virtual_muted(bool on)
+{
+    virtual_muted = on;
+    apply_volumes();
 }
 
 // ================= SOUND CONTROL =================
@@ -238,6 +262,9 @@ void load_sounds(const std::string& folder)
 {
     sounds.clear();
 
+    if (!std::filesystem::exists(folder))
+        std::filesystem::create_directory(folder);
+
     for (auto& entry : std::filesystem::directory_iterator(folder))
     {
         if (!entry.is_regular_file()) continue;
@@ -263,14 +290,65 @@ void load_sounds(const std::string& folder)
 
 void delete_sound(Sound* sound)
 {
+    std::error_code ec;
+    std::filesystem::remove(sound->path, ec);
+    std::string stem = "sounds/" + sound->name;
+    std::filesystem::remove(stem + ".jpg", ec);
+    std::filesystem::remove(stem + ".ppm", ec);
+
     sounds.erase(
         std::remove_if(sounds.begin(), sounds.end(),
             [&](auto& s) { return s.get() == sound; }),
         sounds.end()
     );
+    save_config_to_json();
 }
 
 void rename_sound(Sound* sound, const std::string& new_name)
 {
+    std::string old_stem = "sounds/" + sound->name;
+    std::string new_stem = "sounds/" + new_name;
+
+    auto ext = std::filesystem::path(sound->path).extension().string();
+
+    // Stop any active voices to release file handles
+    for (auto& v : sound->active_voices) {
+        if (v.spk) { ma_sound_stop(v.spk); ma_sound_uninit(v.spk); delete v.spk; v.spk = nullptr; }
+        if (v.vrt) { ma_sound_stop(v.vrt); ma_sound_uninit(v.vrt); delete v.vrt; v.vrt = nullptr; }
+    }
+    sound->active_voices.clear();
+
+    // Close vis decoder to release file handle
+    bool had_vis = sound->vis_ready;
+    if (had_vis) {
+        ma_decoder_uninit(&sound->vis_decoder);
+        sound->vis_ready = false;
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(sound->path, new_stem + ext, ec);
+    if (ec) {
+        if (had_vis) {
+            ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
+            if (ma_decoder_init_file(sound->path.c_str(), &cfg, &sound->vis_decoder) == MA_SUCCESS)
+                sound->vis_ready = true;
+        }
+        return;
+    }
+
+    std::filesystem::rename(old_stem + ".jpg", new_stem + ".jpg", ec);
+    ec.clear();
+    std::filesystem::rename(old_stem + ".ppm", new_stem + ".ppm", ec);
+
     sound->name = new_name;
+    sound->path = new_stem + ext;
+
+    // Re-init vis decoder with new path
+    if (had_vis) {
+        ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
+        if (ma_decoder_init_file(sound->path.c_str(), &cfg, &sound->vis_decoder) == MA_SUCCESS)
+            sound->vis_ready = true;
+    }
+
+    save_config_to_json();
 }

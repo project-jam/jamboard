@@ -216,3 +216,7 @@ extern std::atomic<bool> is_converting;
 extern std::atomic<bool> needs_sound_reload;
 
 extern Sound* g_capturing_hotkey_sound;
+
+extern bool mic_muted;
+extern bool virtual_muted;
+extern bool deafen;

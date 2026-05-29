@@ -1,3 +1,5 @@
 jamboard
 jamboard.exe
+*.dll
 sounds/
+install/*.exe

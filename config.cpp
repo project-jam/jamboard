@@ -13,6 +13,9 @@ void save_config_to_json() {
     j["hardware"]["selected_mic_idx"] = selected_mic_idx;
     j["hardware"]["master_volume"] = master_volume;
     j["hardware"]["stop_all_on_new_play"] = stop_all_on_new_play;
+    j["hardware"]["mic_muted"] = mic_muted;
+    j["hardware"]["virtual_muted"] = virtual_muted;
+    j["hardware"]["deafen"] = deafen;
 
     for (const auto& s : sounds) {
         json sj;
@@ -147,6 +150,9 @@ void load_config_from_json() {
         selected_mic_idx = j["hardware"].value("selected_mic_idx", -1);
         master_volume = j["hardware"].value("master_volume", 1.0f);
         stop_all_on_new_play = j["hardware"].value("stop_all_on_new_play", false);
+        mic_muted = j["hardware"].value("mic_muted", false);
+        virtual_muted = j["hardware"].value("virtual_muted", false);
+        deafen = j["hardware"].value("deafen", false);
     }
 
     if (j.contains("profiles")) {

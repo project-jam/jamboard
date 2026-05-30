@@ -1,9 +1,9 @@
 CXX = g++
-CXXFLAGS = -I/ucrt64/include -static-libgcc -static-libstdc++ -mwindows
+CXXFLAGS = -I/ucrt64/include -static-libgcc -static-libstdc++ -mwindows -DJAMBOARD_VERSION="\"v2.2\""
 LDFLAGS = -L/ucrt64/lib
-LIBS_STATIC = -lglfw3 -lopengl32 -lgdi32
+LIBS_STATIC = -lglfw3 -lopengl32 -lgdi32 -lwinhttp
 LIBS_DYNAMIC = -lavformat -lavcodec -lavutil -lswresample -lswscale
-SOURCES = main.cpp audio_engine.cpp ui.cpp config.cpp import.cpp import_ffmpeg.cpp engine_globals.cpp imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_impl_glfw.cpp imgui_impl_opengl3.cpp
+SOURCES = main.cpp audio_engine.cpp ui.cpp config.cpp import.cpp import_ffmpeg.cpp engine_globals.cpp update_checker.cpp imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_impl_glfw.cpp imgui_impl_opengl3.cpp
 TARGET = jamboard.exe
 
 .PHONY: all dlls clean

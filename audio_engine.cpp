@@ -199,6 +199,7 @@ void play_sound(Sound& sound)
     }
 
     v.play_start = std::chrono::steady_clock::now();
+    v.paused = false;
     sound.active_voices.push_back(v);
 }
 
@@ -225,10 +226,22 @@ void toggle_pause_sound(Sound& sound)
 
     auto& v = sound.active_voices.back();
 
-    if (v.spk) {
-        ma_bool32 playing = ma_sound_is_playing(v.spk);
-        if (playing) ma_sound_stop(v.spk);
-        else ma_sound_start(v.spk);
+    if (!v.paused) {
+        // Pausing — capture current position
+        auto elapsed = std::chrono::steady_clock::now() - v.play_start;
+        v.paused_cursor = std::chrono::duration<float>(elapsed).count()
+            * sound.fx.playback_speed;
+        v.paused = true;
+        if (v.spk) ma_sound_stop(v.spk);
+        if (v.vrt) ma_sound_stop(v.vrt);
+    } else {
+        // Resuming — reset play_start so clock continues from paused position
+        v.play_start = std::chrono::steady_clock::now()
+            - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<float>(v.paused_cursor / sound.fx.playback_speed));
+        v.paused = false;
+        if (v.spk) ma_sound_start(v.spk);
+        if (v.vrt) ma_sound_start(v.vrt);
     }
 }
 
@@ -244,6 +257,7 @@ void clean_sound_voices(Sound& sound)
     sound.active_voices.erase(
         std::remove_if(sound.active_voices.begin(), sound.active_voices.end(),
             [](SoundVoice& v) {
+                if (v.paused) return false;
                 return (!v.spk || !ma_sound_is_playing(v.spk)) &&
                        (!v.vrt || !ma_sound_is_playing(v.vrt));
             }),

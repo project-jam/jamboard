@@ -8,13 +8,16 @@
 #include "audio_engine.h"
 #include "import_ffmpeg.h"
 #include "config.h"
+#include "update_checker.h"
 #include "imgui.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <commdlg.h>
 #endif
@@ -402,7 +405,10 @@ void draw_ui() {
                     if (ImGui::Button(label.c_str(), ImVec2(-1, 34))) {
                         current_selected_sound = s.get();
                         if (s->play_mode == PLAY_RESTART) play_sound(*s);
-                        else if (s->play_mode == PLAY_PAUSE) toggle_pause_sound(*s);
+                        else if (s->play_mode == PLAY_PAUSE) {
+                            if (!s->active_voices.empty()) toggle_pause_sound(*s);
+                            else play_sound(*s);
+                        }
                         else if (s->play_mode == PLAY_STOP) {
                             if (is_sound_playing(*s)) stop_sound(*s);
                             else play_sound(*s);
@@ -488,8 +494,12 @@ void draw_ui() {
 
                     float v_cur = 0.0f, v_tot = 0.0f;
                     if (voice.spk) {
-                        auto el = std::chrono::steady_clock::now() - voice.play_start;
-                        v_cur = std::chrono::duration<float>(el).count() * s->fx.playback_speed;
+                        if (voice.paused)
+                            v_cur = voice.paused_cursor;
+                        else {
+                            auto el = std::chrono::steady_clock::now() - voice.play_start;
+                            v_cur = std::chrono::duration<float>(el).count() * s->fx.playback_speed;
+                        }
                         ma_uint64 pf = 0;
                         if (ma_sound_get_length_in_pcm_frames(voice.spk, &pf) == MA_SUCCESS && pf > 0)
                             v_tot = (float)pf / (float)ma_engine_get_sample_rate(&engine_speakers);
@@ -560,9 +570,13 @@ void draw_ui() {
 
             if (tv && current_selected_sound) {
                 auto& voice = current_selected_sound->active_voices.back();
-                auto elapsed = std::chrono::steady_clock::now() - voice.play_start;
-                cur_sec = std::chrono::duration<float>(elapsed).count()
-                    * current_selected_sound->fx.playback_speed;
+                if (voice.paused)
+                    cur_sec = voice.paused_cursor;
+                else {
+                    auto elapsed = std::chrono::steady_clock::now() - voice.play_start;
+                    cur_sec = std::chrono::duration<float>(elapsed).count()
+                        * current_selected_sound->fx.playback_speed;
+                }
                 ma_uint64 tf = 0;
                 if (ma_sound_get_length_in_pcm_frames(tv, &tf) == MA_SUCCESS && tf > 0) {
                     float sr = (float)ma_engine_get_sample_rate(&engine_speakers);
@@ -1184,6 +1198,16 @@ void draw_ui() {
             ImGui::Separator();
             ImGui::Spacing();
 
+            if (ImGui::Button("Check for Updates")) {
+                check_for_updates();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("Current: %s", JAMBOARD_VERSION);
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
             if (ImGui::Button("Apply Hardware Routing Changes", ImVec2(240, 45))) {
                 setup_audio_routing();
                 save_config_to_json();
@@ -1221,6 +1245,30 @@ void draw_ui() {
         {
             renaming_sound = nullptr;
             ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (g_update_available) {
+        ImGui::OpenPopup("Update Available");
+        g_update_available = false;
+    }
+    if (ImGui::BeginPopupModal("Update Available", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("A new version of JamBoard is available!");
+        ImGui::Spacing();
+        ImGui::Text("Current: %s", JAMBOARD_VERSION);
+        ImGui::Text("Latest:  %s", g_latest_version.c_str());
+        ImGui::Spacing();
+        if (g_download_progress) {
+            ImGui::TextDisabled("Downloading...");
+        } else {
+            if (ImGui::Button("Download & Install", ImVec2(160, 0))) {
+                download_and_install();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Ignore", ImVec2(80, 0))) {
+                ImGui::CloseCurrentPopup();
+            }
         }
         ImGui::EndPopup();
     }

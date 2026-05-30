@@ -10,6 +10,7 @@
 #include "config.h"
 #include "ui.h"
 #include "import.h"
+#include "update_checker.h"
 
 #include <iostream>
 #include <vector>
@@ -55,6 +56,8 @@ int main() {
 #endif
 
     if (!init_audio_system()) return -1;
+
+    start_update_checker();
 
     load_sounds("sounds");
     load_config_from_json();
@@ -116,7 +119,10 @@ int main() {
                     bool held = glfwGetKey(g_window, s->hotkey) == GLFW_PRESS;
                     if (held && !prev_keys[s->hotkey]) {
                         if (s->play_mode == PLAY_RESTART) play_sound(*s);
-                        else if (s->play_mode == PLAY_PAUSE) toggle_pause_sound(*s);
+                        else if (s->play_mode == PLAY_PAUSE) {
+                            if (!s->active_voices.empty()) toggle_pause_sound(*s);
+                            else play_sound(*s);
+                        }
                         else if (s->play_mode == PLAY_STOP) {
                             if (is_sound_playing(*s)) stop_sound(*s); else play_sound(*s);
                         }

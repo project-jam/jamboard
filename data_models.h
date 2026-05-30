@@ -138,6 +138,8 @@ struct SoundVoice {
     ma_sound* spk = nullptr;
     ma_sound* vrt = nullptr;
     std::chrono::steady_clock::time_point play_start;
+    bool paused = false;
+    float paused_cursor = 0.0f;
 };
 
 struct SoundFxChain {

@@ -4,3 +4,9 @@ jamboard.exe
 sounds/
 install/*.exe
 build/
+yt-dlp.exe
+ytdlp_tmp/
+*.o
+*.ppm
+config.json
+imgui.ini

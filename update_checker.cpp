@@ -44,6 +44,12 @@ static std::string http_get(const wchar_t* host, const wchar_t* path) {
         NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return ""; }
 
+    DWORD sslFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                     SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                     SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                     SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &sslFlags, sizeof(sslFlags));
+
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
             WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
         !WinHttpReceiveResponse(hRequest, NULL)) {
@@ -74,12 +80,23 @@ static bool download_file(const wchar_t* host, const wchar_t* path, const std::s
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return false;
 
+    // Follow redirects
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+    WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+
     HINTERNET hConnect = WinHttpConnect(hSession, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
 
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path,
         NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
+
+    // Ignore SSL errors for CDN redirects
+    DWORD sslFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                     SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                     SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                     SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &sslFlags, sizeof(sslFlags));
 
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
             WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
@@ -113,7 +130,13 @@ static bool download_file(const wchar_t* host, const wchar_t* path, const std::s
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
-    return totalWritten > 0;
+
+    // Installer should be at least 1MB — reject truncated downloads
+    if (totalWritten < 1024 * 1024) {
+        DeleteFileA(out_path.c_str());
+        return false;
+    }
+    return true;
 }
 
 static void check_impl() {

@@ -1,17 +1,42 @@
 CXX = g++
-CXXFLAGS = -I/ucrt64/include -static-libgcc -static-libstdc++ -mwindows -DJAMBOARD_VERSION="\"v2.3\""
+CXXFLAGS = -I/ucrt64/include -static-libgcc -static-libstdc++ -mwindows -DJAMBOARD_VERSION="\"v2.5\""
 LDFLAGS = -L/ucrt64/lib
-LIBS_STATIC = -lglfw3 -lopengl32 -lgdi32 -lwinhttp
+LIBS_STATIC = -lglfw3 -lopengl32 -lgdi32 -lwinhttp -lcomdlg32 -lshell32
 LIBS_DYNAMIC = -lavformat -lavcodec -lavutil -lswresample -lswscale
-SOURCES = main.cpp audio_engine.cpp ui.cpp config.cpp import.cpp import_ffmpeg.cpp engine_globals.cpp update_checker.cpp imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_impl_glfw.cpp imgui_impl_opengl3.cpp
+OBJDIR = build
+OBJS = $(OBJDIR)/main.o $(OBJDIR)/audio_engine.o $(OBJDIR)/ui.o $(OBJDIR)/config.o $(OBJDIR)/import.o $(OBJDIR)/import_ffmpeg.o $(OBJDIR)/engine_globals.o $(OBJDIR)/update_checker.o $(OBJDIR)/imgui.o $(OBJDIR)/imgui_draw.o $(OBJDIR)/imgui_tables.o $(OBJDIR)/imgui_widgets.o $(OBJDIR)/imgui_impl_glfw.o $(OBJDIR)/imgui_impl_opengl3.o
 TARGET = jamboard.exe
 
-.PHONY: all dlls clean
+.PHONY: all dlls deps clean
 
-all: $(TARGET) dlls
+all: $(TARGET) dlls deps
 
-$(TARGET): $(SOURCES)
-	$(CXX) $(SOURCES) -o $(TARGET) $(CXXFLAGS) $(LDFLAGS) -Wl,-Bstatic $(LIBS_STATIC) -Wl,-Bdynamic $(LIBS_DYNAMIC)
+$(TARGET): $(OBJS)
+	$(CXX) $(OBJS) -o $(TARGET) $(LDFLAGS) -Wl,-Bstatic $(LIBS_STATIC) -Wl,-Bdynamic $(LIBS_DYNAMIC)
+
+$(OBJDIR)/%.o: %.cpp | $(OBJDIR)
+	$(CXX) -c $< -o $@ $(CXXFLAGS)
+
+$(OBJDIR):
+	mkdir -p $(OBJDIR)
+
+# Headers as dependencies — touching a header rebuilds everything that includes it
+$(OBJDIR)/main.o: main.cpp audio_engine.h config.h ui.h import.h update_checker.h data_models.h
+$(OBJDIR)/audio_engine.o: audio_engine.cpp audio_engine.h config.h data_models.h
+$(OBJDIR)/ui.o: ui.cpp ui.h audio_engine.h import_ffmpeg.h import.h config.h update_checker.h data_models.h
+$(OBJDIR)/config.o: config.cpp config.h data_models.h json.hpp
+$(OBJDIR)/import.o: import.cpp import.h import_ffmpeg.h data_models.h
+$(OBJDIR)/import_ffmpeg.o: import_ffmpeg.cpp import_ffmpeg.h
+$(OBJDIR)/engine_globals.o: engine_globals.cpp audio_engine.h data_models.h
+$(OBJDIR)/update_checker.o: update_checker.cpp update_checker.h json.hpp
+
+# ImGui files rarely change — compile once
+$(OBJDIR)/imgui.o: imgui.cpp imgui.h
+$(OBJDIR)/imgui_draw.o: imgui_draw.cpp imgui.h
+$(OBJDIR)/imgui_tables.o: imgui_tables.cpp imgui.h
+$(OBJDIR)/imgui_widgets.o: imgui_widgets.cpp imgui.h
+$(OBJDIR)/imgui_impl_glfw.o: imgui_impl_glfw.cpp imgui.h imgui_impl_glfw.h
+$(OBJDIR)/imgui_impl_opengl3.o: imgui_impl_opengl3.cpp imgui.h imgui_impl_opengl3.h
 
 dlls: $(TARGET)
 	@echo "Collecting runtime DLLs..."
@@ -29,5 +54,10 @@ dlls: $(TARGET)
 	done
 	@echo "Done."
 
+deps:
+	@echo "Downloading yt-dlp.exe..."
+	@curl -L -o yt-dlp.exe https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
+	@echo "Done."
+
 clean:
-	rm -f $(TARGET) *.dll
+	rm -rf $(OBJDIR) $(TARGET) *.dll

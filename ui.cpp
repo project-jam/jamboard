@@ -7,6 +7,7 @@
 #include "ui.h"
 #include "audio_engine.h"
 #include "import_ffmpeg.h"
+#include "import.h"
 #include "config.h"
 #include "update_checker.h"
 #include "imgui.h"
@@ -142,6 +143,12 @@ void draw_ui() {
         if (pending_delete_sound->thumb_tex_id != 0) {
             glDeleteTextures(1, &pending_delete_sound->thumb_tex_id);
         }
+        if (current_selected_sound == pending_delete_sound)
+            current_selected_sound = nullptr;
+        if (properties_sound == pending_delete_sound)
+            properties_sound = nullptr;
+        if (g_capturing_hotkey_sound == pending_delete_sound)
+            g_capturing_hotkey_sound = nullptr;
         delete_sound(pending_delete_sound);
         pending_delete_sound = nullptr;
     }
@@ -172,8 +179,9 @@ void draw_ui() {
 
         for (auto& voice : s->active_voices) {
             float vol = s->muted ? 0.0f : s->volume_amp;
-            float pitch = s->fx.playback_speed *
-                std::pow(2.0f, s->fx.pitch_semitones / 12.0f);
+            float pitch = s->fx_enabled
+                ? s->fx.playback_speed * std::pow(2.0f, s->fx.pitch_semitones / 12.0f)
+                : 1.0f;
 
             for (auto sp : { voice.spk, voice.vrt }) {
                 if (!sp) continue;
@@ -473,7 +481,6 @@ void draw_ui() {
                         bool fx = s->fx_enabled;
                         if (ImGui::MenuItem("FX Enabled", nullptr, &fx)) {
                             s->fx_enabled = fx;
-                            if (!fx) s->fx.reset_fx();
                             save_config_to_json();
                         }
                         if (ImGui::MenuItem("Clear Hotkey")) {
@@ -510,7 +517,7 @@ void draw_ui() {
                             v_cur = voice.paused_cursor;
                         else {
                             auto el = std::chrono::steady_clock::now() - voice.play_start;
-                            v_cur = std::chrono::duration<float>(el).count() * s->fx.playback_speed;
+                            v_cur = std::chrono::duration<float>(el).count() * (s->fx_enabled ? s->fx.playback_speed : 1.0f);
                         }
                         ma_uint64 pf = 0;
                         if (ma_sound_get_length_in_pcm_frames(voice.spk, &pf) == MA_SUCCESS && pf > 0)
@@ -587,7 +594,7 @@ void draw_ui() {
                 else {
                     auto elapsed = std::chrono::steady_clock::now() - voice.play_start;
                     cur_sec = std::chrono::duration<float>(elapsed).count()
-                        * current_selected_sound->fx.playback_speed;
+                        * (current_selected_sound->fx_enabled ? current_selected_sound->fx.playback_speed : 1.0f);
                 }
                 ma_uint64 tf = 0;
                 if (ma_sound_get_length_in_pcm_frames(tv, &tf) == MA_SUCCESS && tf > 0) {
@@ -622,7 +629,7 @@ void draw_ui() {
                             ma_sound_seek_to_pcm_frame(
                                 current_selected_sound->active_voices.back().vrt, target);
                         float sr = (float)ma_engine_get_sample_rate(&engine_speakers);
-                        float spd = current_selected_sound->fx.playback_speed;
+                        float spd = current_selected_sound->fx_enabled ? current_selected_sound->fx.playback_speed : 1.0f;
                         current_selected_sound->active_voices.back().play_start =
                             std::chrono::steady_clock::now()
                             - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -640,7 +647,7 @@ void draw_ui() {
                         ma_sound_seek_to_pcm_frame(
                             current_selected_sound->active_voices.back().vrt, target);
                     float sr = (float)ma_engine_get_sample_rate(&engine_speakers);
-                    float spd = current_selected_sound->fx.playback_speed;
+                    float spd = current_selected_sound->fx_enabled ? current_selected_sound->fx.playback_speed : 1.0f;
                     current_selected_sound->active_voices.back().play_start =
                         std::chrono::steady_clock::now()
                         - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -860,7 +867,6 @@ void draw_ui() {
                 bool fx_en = s.fx_enabled;
                 if (ImGui::Checkbox("FX Enabled", &fx_en)) {
                     s.fx_enabled = fx_en;
-                    if (!fx_en) s.fx.reset_fx();
                     save_config_to_json();
                 }
                 ImGui::Separator();
@@ -1121,24 +1127,43 @@ void draw_ui() {
         // ==========================================
         if (ImGui::BeginTabItem("Media Importer")) {
             static char path[512] = "";
-            ImGui::InputText("Video/Audio Path", path, 512);
-            if (!is_converting && ImGui::Button("Convert & Import", ImVec2(200, 40))) {
-                std::string p = path;
-                if (std::filesystem::exists(p)) {
+            ImGui::InputText("Path or URL", path, 512);
+            ImGui::Spacing();
+
+            std::string input = path;
+            bool is_url = input.find("http://") == 0 || input.find("https://") == 0;
+
+            if (is_url) {
+                if (!is_converting && ImGui::Button("Download & Import", ImVec2(200, 40))) {
                     is_converting = true;
-                    std::thread([p]() {
-                        std::string b = std::filesystem::path(p).stem().string();
-                        ffmpeg_convert_audio(p, "sounds/" + b + ".wav");
-                        ffmpeg_extract_thumbnail(p, "sounds/" + b + ".ppm");
+                    std::thread([input]() {
+                        download_from_url(input);
                         is_converting = false;
                         needs_sound_reload = true;
                     }).detach();
+                }
+                if (is_converting) ImGui::TextColored(ImVec4(1, 1, 0, 1), "Downloading...");
+            } else {
+                if (!is_converting && ImGui::Button("Convert & Import", ImVec2(200, 40))) {
+                    std::string p = path;
+                    if (std::filesystem::exists(p)) {
+                        is_converting = true;
+                        std::thread([p]() {
+                            std::string b = std::filesystem::path(p).stem().string();
+                            ffmpeg_convert_audio(p, "sounds/" + b + ".wav");
+                            ffmpeg_extract_thumbnail(p, "sounds/" + b + ".ppm");
+                            is_converting = false;
+                            needs_sound_reload = true;
+                        }).detach();
+                    }
                 }
             }
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
                 "Tip: You can also drag & drop audio/video files onto the window.");
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+                "Paste a YouTube/URL link to download audio directly.");
             ImGui::EndTabItem();
         }
 

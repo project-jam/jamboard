@@ -597,7 +597,7 @@
             "trim_enabled": false,
             "trim_end": 1.0,
             "trim_start": 0.0,
-            "volume_amp": 0.3400000035762787,
+            "volume_amp": 1.0,
             "web_url": ""
         },
         "PRI_60Sec": {

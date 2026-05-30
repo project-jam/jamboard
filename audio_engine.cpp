@@ -229,16 +229,17 @@ void toggle_pause_sound(Sound& sound)
     if (!v.paused) {
         // Pausing — capture current position
         auto elapsed = std::chrono::steady_clock::now() - v.play_start;
-        v.paused_cursor = std::chrono::duration<float>(elapsed).count()
-            * sound.fx.playback_speed;
+        float spd = sound.fx_enabled ? sound.fx.playback_speed : 1.0f;
+        v.paused_cursor = std::chrono::duration<float>(elapsed).count() * spd;
         v.paused = true;
         if (v.spk) ma_sound_stop(v.spk);
         if (v.vrt) ma_sound_stop(v.vrt);
     } else {
         // Resuming — reset play_start so clock continues from paused position
+        float spd = sound.fx_enabled ? sound.fx.playback_speed : 1.0f;
         v.play_start = std::chrono::steady_clock::now()
             - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                std::chrono::duration<float>(v.paused_cursor / sound.fx.playback_speed));
+                std::chrono::duration<float>(v.paused_cursor / spd));
         v.paused = false;
         if (v.spk) ma_sound_start(v.spk);
         if (v.vrt) ma_sound_start(v.vrt);
@@ -305,11 +306,18 @@ void load_sounds(const std::string& folder)
 
 void delete_sound(Sound* sound)
 {
+    // Close vis_decoder first — Windows can't delete open files
+    if (sound->vis_ready) {
+        ma_decoder_uninit(&sound->vis_decoder);
+        sound->vis_ready = false;
+    }
+
+    stop_sound(*sound);
+
     std::error_code ec;
-    std::filesystem::remove(sound->path, ec);
     std::string stem = "sounds/" + sound->name;
-    std::filesystem::remove(stem + ".jpg", ec);
-    std::filesystem::remove(stem + ".ppm", ec);
+    for (auto ext : { ".mp3", ".wav", ".ogg", ".jpg", ".jpeg", ".png", ".bmp", ".tga", ".ppm", ".webp" })
+        std::filesystem::remove(stem + ext, ec);
 
     sounds.erase(
         std::remove_if(sounds.begin(), sounds.end(),

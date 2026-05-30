@@ -98,6 +98,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -195,6 +196,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -292,6 +294,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -389,6 +392,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -486,6 +490,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -583,6 +588,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -680,6 +686,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -777,6 +784,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -874,6 +882,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -971,6 +980,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -1068,6 +1078,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -1165,6 +1176,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -1262,6 +1274,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -1359,6 +1372,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -1456,6 +1470,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -1553,6 +1568,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -1650,6 +1666,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -1730,7 +1747,7 @@
                 "phaser_feedback": 0.5,
                 "phaser_rate": 0.5,
                 "pitch_semitones": 0.0,
-                "playback_speed": 1.0,
+                "playback_speed": 0.6000000238418579,
                 "reverb_damping": 0.20000000298023224,
                 "reverb_room_size": 0.5,
                 "reverb_wet": 0.30000001192092896,
@@ -1747,6 +1764,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -1844,6 +1862,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -1852,7 +1871,7 @@
             "trim_enabled": false,
             "trim_end": 1.0,
             "trim_start": 0.0,
-            "volume_amp": 0.3400000035762787,
+            "volume_amp": 0.5299999713897705,
             "web_url": ""
         },
         "erm-actually-nerd-catter": {
@@ -1941,6 +1960,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -2038,6 +2058,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": true,
             "muted": false,
@@ -2135,6 +2156,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,
@@ -2232,6 +2254,7 @@
                 "tremolo_enabled": false,
                 "tremolo_rate": 4.0
             },
+            "fx_enabled": true,
             "hotkey": -1,
             "loop_track": false,
             "muted": false,

@@ -25,6 +25,7 @@ void save_config_to_json() {
         sj["loop_track"] = s->loop_track;
         sj["overlap_enabled"] = s->overlap_enabled;
         sj["muted"] = s->muted;
+        sj["fx_enabled"] = s->fx_enabled;
         sj["trim_enabled"] = s->trim_enabled;
         sj["trim_start"] = s->trim_start;
         sj["trim_end"] = s->trim_end;
@@ -168,6 +169,7 @@ void load_config_from_json() {
             s->loop_track = sj.value("loop_track", false);
             s->overlap_enabled = sj.value("overlap_enabled", false);
             s->muted = sj.value("muted", false);
+            s->fx_enabled = sj.value("fx_enabled", true);
             s->trim_enabled = sj.value("trim_enabled", false);
             s->trim_start = sj.value("trim_start", 0.0f);
             s->trim_end = sj.value("trim_end", 1.0f);

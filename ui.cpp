@@ -42,8 +42,11 @@ int seek_cooldown_frames = 0;
 static char search_filter[128] = "";
 static Sound* pending_delete_sound = nullptr;
 static Sound* renaming_sound = nullptr;
-static char rename_buf[256] = "";
+static Sound* properties_sound = nullptr;
+
+static char rename_buf[128] = {};
 static bool open_rename_popup = false;
+static bool open_properties_popup = false;
 
 static unsigned int load_texture_from_file(const char* filename) {
     int width, height, channels;
@@ -423,7 +426,10 @@ void draw_ui() {
                         current_selected_sound = s.get();
                         ImGui::Text("Sound: %s", s->name.c_str());
                         ImGui::Separator();
-                        if (ImGui::MenuItem("Properties")) {}
+                        if (ImGui::MenuItem("Properties")) {
+                            properties_sound = s.get();
+                            open_properties_popup = true;
+                        }
                         if (ImGui::MenuItem("Rename")) {
                             renaming_sound = s.get();
                             strncpy(rename_buf, s->name.c_str(), sizeof(rename_buf) - 1);
@@ -463,6 +469,12 @@ void draw_ui() {
                         bool m = s->muted;
                         if (ImGui::MenuItem("Mute", nullptr, &m)) {
                             s->muted = m; save_config_to_json();
+                        }
+                        bool fx = s->fx_enabled;
+                        if (ImGui::MenuItem("FX Enabled", nullptr, &fx)) {
+                            s->fx_enabled = fx;
+                            if (!fx) s->fx.reset_fx();
+                            save_config_to_json();
                         }
                         if (ImGui::MenuItem("Clear Hotkey")) {
                             s->hotkey = -1; save_config_to_json();
@@ -799,6 +811,12 @@ void draw_ui() {
                 if (ImGui::Selectable(s->name.c_str(), sel))
                     current_selected_sound = s.get();
 
+                if (!s->fx_enabled) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("[FX OFF]");
+                    continue;
+                }
+
                 // Show fx indicator dots
                 int count = 0;
                 if (s->fx.custom_reverb) count++;
@@ -839,17 +857,30 @@ void draw_ui() {
                 auto save = []{ save_config_to_json(); };
 
                 ImGui::Text("Selected: %s", s.name.c_str());
+                bool fx_en = s.fx_enabled;
+                if (ImGui::Checkbox("FX Enabled", &fx_en)) {
+                    s.fx_enabled = fx_en;
+                    if (!fx_en) s.fx.reset_fx();
+                    save_config_to_json();
+                }
                 ImGui::Separator();
 
-                // --- Volume & Pan ---
+                // --- Volume & Pan (always available) ---
                 if (FxHeader("Volume && Pan")) {
                     FxSlider("Volume", &s.volume_amp, 0.0f, 3.0f);
                     ResetBtn("##fv", &s.volume_amp, 1.0f);
 
                     FxSlider("Pan", &fx.pan, -1.0f, 1.0f);
                     CenterBtn("##pan", &fx.pan, 0.0f);
+                }
 
-                    FxSlider("Playback Speed", &fx.playback_speed, 0.1f, 4.0f, "%.2fx");
+                if (!s.fx_enabled) {
+                    ImGui::TextDisabled("FX is disabled for this sound.");
+                } else {
+
+                // --- Playback Speed ---
+                if (FxHeader("Playback Speed")) {
+                    FxSlider("Speed", &fx.playback_speed, 0.1f, 4.0f, "%.2fx");
                     ResetBtn("##spd", &fx.playback_speed, 1.0f);
                 }
 
@@ -1077,6 +1108,7 @@ void draw_ui() {
                         ImGui::Unindent();
                     }
                 }
+                } // end fx_enabled else
             } else {
                 ImGui::TextDisabled("Select a sound from the left list.");
             }
@@ -1247,6 +1279,38 @@ void draw_ui() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
+    }
+
+    if (open_properties_popup) {
+        ImGui::OpenPopup("Properties");
+        open_properties_popup = false;
+    }
+    if (properties_sound && ImGui::BeginPopupModal("Properties", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        auto& s = *properties_sound;
+        ImGui::Text("Name: %s", s.name.c_str());
+        ImGui::Text("Path: %s", s.path.c_str());
+
+        if (s.vis_ready) {
+            ma_uint64 df;
+            if (ma_decoder_get_length_in_pcm_frames(&s.vis_decoder, &df) == MA_SUCCESS && df > 0)
+                ImGui::Text("Duration: %s", fmt_time((float)df / (float)s.vis_decoder.outputSampleRate).c_str());
+        }
+
+        ImGui::Text("Play Mode: %s", s.play_mode == PLAY_RESTART ? "Restart" : s.play_mode == PLAY_PAUSE ? "Pause" : "Stop");
+        ImGui::Text("Hotkey: %s", s.hotkey >= 0 ? glfwGetKeyName(s.hotkey, 0) : "None");
+        ImGui::Text("Loop: %s", s.loop_track ? "Yes" : "No");
+        ImGui::Text("Overlap: %s", s.overlap_enabled ? "Yes" : "No");
+        ImGui::Text("Trim: %s", s.trim_enabled ? "Yes" : "No");
+        ImGui::Text("FX: %s", s.fx_enabled ? "Enabled" : "Disabled");
+
+        ImGui::Spacing();
+        if (ImGui::Button("Close", ImVec2(120, 0))) {
+            properties_sound = nullptr;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    } else if (!open_properties_popup) {
+        properties_sound = nullptr;
     }
 
     if (g_update_available) {

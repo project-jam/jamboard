@@ -21,6 +21,12 @@ struct SoundEffectsState {
     // Stereo
     float pan = 0.0f;
 
+    void reset_fx() {
+        float saved_pan = pan;
+        *this = SoundEffectsState{};
+        pan = saved_pan;
+    }
+
     // Standard FX
     bool bass_boost = false;
     bool custom_reverb = false;
@@ -181,6 +187,7 @@ struct Sound {
     bool loop_track = false;
     bool overlap_enabled = false;
     bool muted = false;
+    bool fx_enabled = true;
 
     bool trim_enabled = false;
     float trim_start = 0.0f;

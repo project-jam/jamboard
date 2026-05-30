@@ -3,4 +3,4 @@ jamboard.exe
 *.dll
 sounds/
 install/*.exe
-build
+build/

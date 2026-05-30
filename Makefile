@@ -1,8 +1,8 @@
 CXX = g++
-CXXFLAGS = -I/ucrt64/include -static-libgcc -static-libstdc++ -mwindows -DJAMBOARD_VERSION="\"v2.7\""
+CXXFLAGS = -I/ucrt64/include -static-libgcc -static-libstdc++ -mwindows -DJAMBOARD_VERSION="\"v2.8\""
 LDFLAGS = -L/ucrt64/lib
-LIBS_STATIC = -lglfw3 -lopengl32 -lgdi32 -lwinhttp -lcomdlg32 -lshell32
-LIBS_DYNAMIC = -lavformat -lavcodec -lavutil -lswresample -lswscale
+LIBS_STATIC = -lglfw3 -lopengl32 -lgdi32 -lcomdlg32 -lshell32
+LIBS_DYNAMIC = -lavformat -lavcodec -lavutil -lswresample -lswscale -lcurl -lws2_32
 OBJDIR = build
 OBJS = $(OBJDIR)/main.o $(OBJDIR)/audio_engine.o $(OBJDIR)/ui.o $(OBJDIR)/config.o $(OBJDIR)/import.o $(OBJDIR)/import_ffmpeg.o $(OBJDIR)/engine_globals.o $(OBJDIR)/update_checker.o $(OBJDIR)/imgui.o $(OBJDIR)/imgui_draw.o $(OBJDIR)/imgui_tables.o $(OBJDIR)/imgui_widgets.o $(OBJDIR)/imgui_impl_glfw.o $(OBJDIR)/imgui_impl_opengl3.o
 TARGET = jamboard.exe

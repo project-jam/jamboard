@@ -4,8 +4,9 @@
 #include <atomic>
 #include <chrono>
 #include <string>
+#include <fstream>
+#include <curl/curl.h>
 #include <windows.h>
-#include <winhttp.h>
 
 using json = nlohmann::json;
 
@@ -17,122 +18,63 @@ bool g_download_progress = false;
 
 static std::atomic<bool> g_checker_running{false};
 
-static std::string wide_to_utf8(const wchar_t* w) {
-    int len = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
-    std::string s(len - 1, 0);
-    WideCharToMultiByte(CP_UTF8, 0, w, -1, &s[0], len, NULL, NULL);
-    return s;
+static size_t write_string(void* ptr, size_t size, size_t nmemb, void* userdata) {
+    ((std::string*)userdata)->append((char*)ptr, size * nmemb);
+    return size * nmemb;
 }
 
-static std::wstring utf8_to_wide(const char* s) {
-    int len = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
-    std::wstring w(len - 1, 0);
-    MultiByteToWideChar(CP_UTF8, 0, s, -1, &w[0], len);
-    return w;
+static size_t write_file(void* ptr, size_t size, size_t nmemb, void* userdata) {
+    FILE* fp = (FILE*)userdata;
+    return fwrite(ptr, size, nmemb, fp);
 }
 
-static std::string http_get(const wchar_t* host, const wchar_t* path) {
-    HINTERNET hSession = WinHttpOpen(L"JamBoard/1.0",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return "";
-
-    HINTERNET hConnect = WinHttpConnect(hSession, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return ""; }
-
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path,
-        NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return ""; }
-
-    DWORD sslFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
-                     SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
-                     SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
-                     SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
-    WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &sslFlags, sizeof(sslFlags));
-
-    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-        !WinHttpReceiveResponse(hRequest, NULL)) {
-        WinHttpCloseHandle(hRequest);
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
-        return "";
-    }
+static std::string http_get(const std::string& url) {
+    CURL* curl = curl_easy_init();
+    if (!curl) return "";
 
     std::string body;
-    char buf[4096];
-    DWORD bytesRead = 0;
-    while (WinHttpReadData(hRequest, buf, sizeof(buf) - 1, &bytesRead) && bytesRead > 0) {
-        buf[bytesRead] = 0;
-        body += buf;
-        bytesRead = 0;
-    }
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_string);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
 
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
-    return body;
+    CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    return (res == CURLE_OK) ? body : "";
 }
 
-static bool download_file(const wchar_t* host, const wchar_t* path, const std::string& out_path) {
-    HINTERNET hSession = WinHttpOpen(L"JamBoard/1.0",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return false;
+static bool download_file(const std::string& url, const std::string& out_path) {
+    CURL* curl = curl_easy_init();
+    if (!curl) return false;
 
-    // Follow redirects
-    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
-    WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+    FILE* fp = fopen(out_path.c_str(), "wb");
+    if (!fp) { curl_easy_cleanup(curl); return false; }
 
-    HINTERNET hConnect = WinHttpConnect(hSession, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_file);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
 
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path,
-        NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
+    CURLcode res = curl_easy_perform(curl);
+    fclose(fp);
+    curl_easy_cleanup(curl);
 
-    // Ignore SSL errors for CDN redirects
-    DWORD sslFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
-                     SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
-                     SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
-                     SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
-    WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &sslFlags, sizeof(sslFlags));
-
-    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-        !WinHttpReceiveResponse(hRequest, NULL)) {
-        WinHttpCloseHandle(hRequest);
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+    if (res != CURLE_OK) {
+        DeleteFileA(out_path.c_str());
         return false;
     }
 
-    HANDLE hFile = CreateFileA(out_path.c_str(), GENERIC_WRITE, 0, NULL,
-        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
-        WinHttpCloseHandle(hRequest);
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
-        return false;
-    }
-
-    char buf[65536];
-    DWORD bytesRead = 0;
-    DWORD totalWritten = 0;
-    while (WinHttpReadData(hRequest, buf, sizeof(buf), &bytesRead) && bytesRead > 0) {
-        DWORD written = 0;
-        WriteFile(hFile, buf, bytesRead, &written, NULL);
-        totalWritten += written;
-        bytesRead = 0;
-    }
-
+    // Verify file is at least 1MB (reject truncated downloads)
+    HANDLE hFile = CreateFileA(out_path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+    DWORD size = GetFileSize(hFile, NULL);
     CloseHandle(hFile);
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
-
-    // Installer should be at least 1MB — reject truncated downloads
-    if (totalWritten < 1024 * 1024) {
+    if (size < 1024 * 1024) {
         DeleteFileA(out_path.c_str());
         return false;
     }
@@ -140,8 +82,7 @@ static bool download_file(const wchar_t* host, const wchar_t* path, const std::s
 }
 
 static void check_impl() {
-    std::string body = http_get(L"api.github.com",
-        L"/repos/project-jam/jamboard/releases/latest");
+    std::string body = http_get("https://api.github.com/repos/project-jam/jamboard/releases/latest");
     if (body.empty()) return;
 
     try {
@@ -177,6 +118,7 @@ static void check_thread() {
 }
 
 void start_update_checker() {
+    curl_global_init(CURL_GLOBAL_DEFAULT);
     if (g_checker_running) return;
     g_checker_running = true;
     std::thread(check_thread).detach();
@@ -189,32 +131,19 @@ void check_for_updates() {
 void download_and_install() {
     if (g_download_url.empty()) return;
 
-    auto url_w = utf8_to_wide(g_download_url.c_str());
-
-    // Parse host and path from download URL
-    // https://github.com/project-jam/jamboard/releases/download/v2.2/JamBoard_Setup.exe
-    std::wstring host = L"github.com";
-    std::wstring path;
-    size_t path_start = url_w.find(L"/releases/download/");
-    if (path_start != std::wstring::npos)
-        path = url_w.substr(path_start);
-
-    // Get temp path
     char temp_path[MAX_PATH];
     GetTempPathA(MAX_PATH, temp_path);
     std::string installer_path = std::string(temp_path) + "JamBoard_Setup.exe";
 
     g_download_progress = true;
 
-    std::thread([host, path, installer_path]() {
-        bool ok = download_file(host.c_str(), path.c_str(), installer_path);
+    std::thread([installer_path]() {
+        bool ok = download_file(g_download_url, installer_path);
         g_download_progress = false;
 
         if (ok) {
-            // Run installer silently (skips welcome wizard)
             ShellExecuteA(NULL, "open", installer_path.c_str(),
                 "/SILENT", NULL, SW_SHOWNORMAL);
-            // Exit current app so installer can overwrite
             Sleep(1000);
             ExitProcess(0);
         }

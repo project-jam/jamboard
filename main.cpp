@@ -83,6 +83,32 @@ int main() {
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
 
+    ImGuiIO& io = ImGui::GetIO();
+    ImFontConfig font_cfg;
+    font_cfg.OversampleH = 1;
+    font_cfg.OversampleV = 1;
+    font_cfg.PixelSnapH = true;
+    char exe_buf[MAX_PATH];
+    GetModuleFileNameA(NULL, exe_buf, MAX_PATH);
+    std::string font_path = std::filesystem::path(exe_buf).parent_path().string() + "\\zpix.ttf";
+    static const ImWchar ranges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin Supplement
+        0x2000, 0x206F, // General Punctuation
+        0x3000, 0x30FF, // CJK Symbols and Punctuation, Hiragana, Katakana
+        0x31F0, 0x31FF, // Katakana Phonetic Extensions
+        0xFF00, 0xFFEF, // Halfwidth and Fullwidth Forms
+        0x4E00, 0x9FFF, // CJK Unified Ideographs
+        0xF900, 0xFAFF, // CJK Compatibility Ideographs
+        0xFE30, 0xFE4F, // CJK Compatibility Forms
+        0x2E80, 0x2EFF, // CJK Radicals Supplement
+        0x2F00, 0x2FDF, // Kangxi Radicals
+        0x31C0, 0x31EF, // CJK Strokes
+        0x2010, 0x2027, // General Punctuation (dashes, etc.)
+        0x2030, 0x205E, // General Punctuation (per mille, etc.)
+        0, 0
+    };
+    io.Fonts->AddFontFromFileTTF(font_path.c_str(), 16.0f, &font_cfg, ranges);
+
     ImGui_ImplGlfw_InitForOpenGL(g_window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
 

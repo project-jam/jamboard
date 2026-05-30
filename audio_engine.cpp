@@ -316,7 +316,7 @@ void delete_sound(Sound* sound)
 
     std::error_code ec;
     std::string stem = "sounds/" + sound->name;
-    for (auto ext : { ".mp3", ".wav", ".ogg", ".jpg", ".jpeg", ".png", ".bmp", ".tga", ".ppm", ".webp" })
+    for (auto ext : { ".mp3", ".wav", ".ogg", ".jpg", ".jpeg", ".png", ".bmp", ".tga", ".ppm" })
         std::filesystem::remove(stem + ext, ec);
 
     sounds.erase(

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <string>
+#include <cstdio>
 #include <fstream>
 #include <curl/curl.h>
 #include <windows.h>
@@ -81,6 +82,17 @@ static bool download_file(const std::string& url, const std::string& out_path) {
     return true;
 }
 
+static bool is_newer_version(const std::string& tag) {
+    auto parse = [](const std::string& v) -> int {
+        std::string s = v;
+        if (s.size() > 0 && (s[0] == 'v' || s[0] == 'V')) s = s.substr(1);
+        int major = 0, minor = 0, patch = 0;
+        sscanf(s.c_str(), "%d.%d.%d", &major, &minor, &patch);
+        return major * 10000 + minor * 100 + patch;
+    };
+    return parse(tag) > parse(JAMBOARD_VERSION);
+}
+
 static void check_impl() {
     std::string body = http_get("https://api.github.com/repos/project-jam/jamboard/releases/latest");
     if (body.empty()) return;
@@ -88,7 +100,7 @@ static void check_impl() {
     try {
         auto j = json::parse(body);
         std::string tag = j.value("tag_name", "");
-        if (tag.empty() || tag == JAMBOARD_VERSION) return;
+        if (tag.empty() || !is_newer_version(tag)) return;
 
         std::string download_url;
         if (j.contains("assets") && j["assets"].is_array()) {

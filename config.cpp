@@ -156,7 +156,6 @@ void load_config_from_json() {
         mic_muted = j["hardware"].value("mic_muted", false);
         virtual_muted = j["hardware"].value("virtual_muted", false);
         deafen = j["hardware"].value("deafen", false);
-        program_files_mode = j["hardware"].value("program_files", false);
         scrub_enabled = j["hardware"].value("scrub_enabled", false);
     }
 

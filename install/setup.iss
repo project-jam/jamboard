@@ -1,6 +1,6 @@
 [Setup]
 AppName=JamBoard
-AppVersion=3.0
+AppVersion=3.3
 AppPublisher=Project Jam
 DefaultDirName={autopf}\JamBoard
 DefaultGroupName=JamBoard
@@ -22,6 +22,7 @@ Name: "{app}\sounds"
 Source: "..\jamboard.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\yt-dlp.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\zpix.ttf"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\JamBoard\JamBoard"; Filename: "{app}\jamboard.exe"

@@ -37,6 +37,7 @@
 extern GLFWwindow* g_window;
 
 float user_drag_progress = 0.0f;
+static std::string download_error;
 bool is_user_dragging_slider = false;
 int seek_cooldown_frames = 0;
 
@@ -468,7 +469,7 @@ void draw_ui() {
                         if (s->thumb_tex_id != 0 && ImGui::MenuItem("Remove Artwork")) {
                             glDeleteTextures(1, &s->thumb_tex_id);
                             s->thumb_tex_id = 0;
-                            for (auto ext : { ".ppm", ".jpg", ".jpeg", ".png", ".bmp", ".tga" }) {
+        for (auto ext : { ".ppm", ".jpg", ".jpeg", ".png", ".bmp", ".tga" }) {
                                 std::error_code ec;
                                 std::filesystem::remove("sounds/" + s->name + ext, ec);
                             }
@@ -1136,13 +1137,19 @@ void draw_ui() {
             if (is_url) {
                 if (!is_converting && ImGui::Button("Download & Import", ImVec2(200, 40))) {
                     is_converting = true;
+                    download_error.clear();
                     std::thread([input]() {
-                        download_from_url(input);
+                        bool success;
+                        std::string error;
+                        download_from_url(input, success, error);
+                        if (!success) download_error = error;
                         is_converting = false;
                         needs_sound_reload = true;
                     }).detach();
                 }
                 if (is_converting) ImGui::TextColored(ImVec4(1, 1, 0, 1), "Downloading...");
+                if (!download_error.empty())
+                    ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "%s", download_error.c_str());
             } else {
                 if (!is_converting && ImGui::Button("Convert & Import", ImVec2(200, 40))) {
                     std::string p = path;

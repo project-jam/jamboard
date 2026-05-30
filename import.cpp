@@ -15,6 +15,8 @@ void convert_media(const std::string& path)
 
 static bool run_process(const std::string& cmd) {
     STARTUPINFOA si = { sizeof(si) };
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi = {};
     std::string cmd_copy = cmd;
     if (!CreateProcessA(NULL, &cmd_copy[0], NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
@@ -27,22 +29,33 @@ static bool run_process(const std::string& cmd) {
     return exit_code == 0;
 }
 
+static std::string get_data_dir() {
+    if (program_files_mode) {
+        char* appdata = getenv("APPDATA");
+        if (appdata) return std::string(appdata) + "\\JamBoard";
+    }
+    return ".";
+}
+
 bool download_from_url(const std::string& url) {
-    std::string tmp_dir = "ytdlp_tmp";
+    std::string data_dir = get_data_dir();
+    std::string tmp_dir = data_dir + "\\ytdlp_tmp";
+    std::string sounds_dir = data_dir + "\\sounds";
     std::filesystem::create_directories(tmp_dir);
+    std::filesystem::create_directories(sounds_dir);
 
     // Download audio as WAV
-    std::string audio_cmd = "yt-dlp.exe -x --audio-format wav --no-playlist -o \"" +
-        tmp_dir + "/%(title)s.%(ext)s\" \"" + url + "\"";
+    std::string audio_cmd = "yt-dlp.exe --quiet -x --audio-format wav --no-playlist -o \"" +
+        tmp_dir + "\\%(title)s.%(ext)s\" \"" + url + "\"";
     if (!run_process(audio_cmd)) {
         std::error_code ec;
         std::filesystem::remove_all(tmp_dir, ec);
         return false;
     }
 
-    // Download thumbnail (convert to jpg so the app can load it)
-    std::string thumb_cmd = "yt-dlp.exe --write-thumbnail --convert-thumbnails jpg --skip-download --no-playlist -o \"" +
-        tmp_dir + "/%(title)s\" \"" + url + "\"";
+    // Download thumbnail
+    std::string thumb_cmd = "yt-dlp.exe --quiet --write-thumbnail --convert-thumbnails jpg --skip-download --no-playlist -o \"" +
+        tmp_dir + "\\%(title)s\" \"" + url + "\"";
     run_process(thumb_cmd);
 
     // Find and move downloaded files to sounds/
@@ -64,7 +77,7 @@ bool download_from_url(const std::string& url) {
         for (auto& c : lower_ext) c = (char)std::tolower(c);
 
         if (lower_ext == ".wav") {
-            std::string dest = "sounds/" + safe_name + ".wav";
+            std::string dest = sounds_dir + "\\" + safe_name + ".wav";
             std::error_code ec;
             std::filesystem::rename(entry.path(), dest, ec);
             if (ec) std::filesystem::copy_file(entry.path(), dest, std::filesystem::copy_options::overwrite_existing, ec);
@@ -72,22 +85,20 @@ bool download_from_url(const std::string& url) {
         else if (lower_ext == ".webm" || lower_ext == ".m4a" || lower_ext == ".opus" ||
                  lower_ext == ".mp3" || lower_ext == ".ogg" || lower_ext == ".flac") {
             // yt-dlp gave us a non-WAV audio — convert it
-            std::string tmp_audio = tmp_dir + "/tmp_convert" + ext;
+            std::string tmp_audio = tmp_dir + "\\tmp_convert" + ext;
             std::error_code ec;
             std::filesystem::rename(entry.path(), tmp_audio, ec);
             if (ec) { tmp_audio = entry.path().string(); }
-            ffmpeg_convert_audio(tmp_audio, "sounds/" + safe_name + ".wav");
+            ffmpeg_convert_audio(tmp_audio, sounds_dir + "\\" + safe_name + ".wav");
         }
         else if (lower_ext == ".jpg" || lower_ext == ".jpeg" || lower_ext == ".png" ||
                  lower_ext == ".webp" || lower_ext == ".ppm") {
-            // Rename thumbnail to PPM for consistency
             if (lower_ext != ".ppm") {
-                // Convert to PPM via ffmpeg_extract_thumbnail workaround — just copy as-is
-                std::string dest = "sounds/" + safe_name + ext;
+                std::string dest = sounds_dir + "\\" + safe_name + ext;
                 std::error_code ec;
                 std::filesystem::copy_file(entry.path(), dest, std::filesystem::copy_options::overwrite_existing, ec);
             } else {
-                std::string dest = "sounds/" + safe_name + ".ppm";
+                std::string dest = sounds_dir + "\\" + safe_name + ".ppm";
                 std::error_code ec;
                 std::filesystem::rename(entry.path(), dest, ec);
             }

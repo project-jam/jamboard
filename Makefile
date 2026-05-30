@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -I/ucrt64/include -static-libgcc -static-libstdc++ -mwindows -DJAMBOARD_VERSION="\"v2.6\""
+CXXFLAGS = -I/ucrt64/include -static-libgcc -static-libstdc++ -mwindows -DJAMBOARD_VERSION="\"v2.7\""
 LDFLAGS = -L/ucrt64/lib
 LIBS_STATIC = -lglfw3 -lopengl32 -lgdi32 -lwinhttp -lcomdlg32 -lshell32
 LIBS_DYNAMIC = -lavformat -lavcodec -lavutil -lswresample -lswscale
@@ -12,7 +12,7 @@ TARGET = jamboard.exe
 all: $(TARGET) dlls deps
 
 $(TARGET): $(OBJS)
-	$(CXX) $(OBJS) -o $(TARGET) $(LDFLAGS) -Wl,-Bstatic $(LIBS_STATIC) -Wl,-Bdynamic $(LIBS_DYNAMIC)
+	$(CXX) $(OBJS) -o $(TARGET) $(CXXFLAGS) $(LDFLAGS) -Wl,-Bstatic $(LIBS_STATIC) -Wl,-Bdynamic $(LIBS_DYNAMIC)
 
 $(OBJDIR)/%.o: %.cpp | $(OBJDIR)
 	$(CXX) -c $< -o $@ $(CXXFLAGS)

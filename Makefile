@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -I/ucrt64/include -static-libgcc -static-libstdc++ -mwindows -DJAMBOARD_VERSION="\"v2.5\""
+CXXFLAGS = -I/ucrt64/include -static-libgcc -static-libstdc++ -mwindows -DJAMBOARD_VERSION="\"v2.6\""
 LDFLAGS = -L/ucrt64/lib
 LIBS_STATIC = -lglfw3 -lopengl32 -lgdi32 -lwinhttp -lcomdlg32 -lshell32
 LIBS_DYNAMIC = -lavformat -lavcodec -lavutil -lswresample -lswscale

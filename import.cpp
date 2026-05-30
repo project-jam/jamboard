@@ -13,13 +13,14 @@ void convert_media(const std::string& path)
     ffmpeg_extract_thumbnail(path, "sounds/" + stem + ".ppm");
 }
 
-static bool run_process(const std::string& cmd) {
+static bool run_process(const std::string& cmd, const std::string& work_dir = "") {
     STARTUPINFOA si = { sizeof(si) };
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi = {};
     std::string cmd_copy = cmd;
-    if (!CreateProcessA(NULL, &cmd_copy[0], NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+    LPCSTR dir = work_dir.empty() ? NULL : work_dir.c_str();
+    if (!CreateProcessA(NULL, &cmd_copy[0], NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, dir, &si, &pi))
         return false;
     WaitForSingleObject(pi.hProcess, 300000);
     DWORD exit_code = 0;
@@ -37,26 +38,34 @@ static std::string get_data_dir() {
     return ".";
 }
 
+static std::string get_exe_dir() {
+    char buf[MAX_PATH];
+    GetModuleFileNameA(NULL, buf, MAX_PATH);
+    return std::filesystem::path(buf).parent_path().string();
+}
+
 bool download_from_url(const std::string& url) {
     std::string data_dir = get_data_dir();
+    std::string exe_dir = get_exe_dir();
     std::string tmp_dir = data_dir + "\\ytdlp_tmp";
     std::string sounds_dir = data_dir + "\\sounds";
+    std::string ytdlp = exe_dir + "\\yt-dlp.exe";
     std::filesystem::create_directories(tmp_dir);
     std::filesystem::create_directories(sounds_dir);
 
     // Download audio as WAV
-    std::string audio_cmd = "yt-dlp.exe --quiet -x --audio-format wav --no-playlist -o \"" +
+    std::string audio_cmd = "\"" + ytdlp + "\" --quiet -x --audio-format wav --no-playlist -o \"" +
         tmp_dir + "\\%(title)s.%(ext)s\" \"" + url + "\"";
-    if (!run_process(audio_cmd)) {
+    if (!run_process(audio_cmd, exe_dir)) {
         std::error_code ec;
         std::filesystem::remove_all(tmp_dir, ec);
         return false;
     }
 
     // Download thumbnail
-    std::string thumb_cmd = "yt-dlp.exe --quiet --write-thumbnail --convert-thumbnails jpg --skip-download --no-playlist -o \"" +
+    std::string thumb_cmd = "\"" + ytdlp + "\" --quiet --write-thumbnail --convert-thumbnails jpg --skip-download --no-playlist -o \"" +
         tmp_dir + "\\%(title)s\" \"" + url + "\"";
-    run_process(thumb_cmd);
+    run_process(thumb_cmd, exe_dir);
 
     // Find and move downloaded files to sounds/
     for (auto& entry : std::filesystem::directory_iterator(tmp_dir)) {

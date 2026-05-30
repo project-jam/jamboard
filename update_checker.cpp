@@ -142,8 +142,8 @@ void download_and_install() {
         g_download_progress = false;
 
         if (ok) {
-            ShellExecuteA(NULL, "open", installer_path.c_str(),
-                "/SILENT", NULL, SW_SHOWNORMAL);
+            ShellExecuteA(NULL, "runas", installer_path.c_str(),
+                "/SILENT /SUPPRESSMSGBOXES", NULL, SW_SHOWNORMAL);
             Sleep(1000);
             ExitProcess(0);
         }

@@ -39,3 +39,4 @@ bool virtual_muted = false;
 bool deafen = false;
 bool program_files_mode = false;
 bool scrub_enabled = false;
+bool mic_passthrough_enabled = false;

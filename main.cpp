@@ -107,7 +107,7 @@ int main() {
         0x2030, 0x205E, // General Punctuation (per mille, etc.)
         0, 0
     };
-    io.Fonts->AddFontFromFileTTF(font_path.c_str(), 16.0f, &font_cfg, ranges);
+    io.Fonts->AddFontFromFileTTF(font_path.c_str(), 12.0f, &font_cfg, ranges);
 
     ImGui_ImplGlfw_InitForOpenGL(g_window, true);
     ImGui_ImplOpenGL3_Init("#version 130");

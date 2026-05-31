@@ -18,6 +18,7 @@ extern bool speakers_engine_initialized;
 extern bool virtual_engine_initialized;
 extern bool mic_device_initialized;
 extern bool mic_speaker_device_initialized;
+extern bool mic_passthrough_enabled;
 
 bool init_audio_system();
 void shutdown_audio_routing();

@@ -6,9 +6,25 @@
 #include <algorithm>
 #include <windows.h>
 
+static std::filesystem::path utf8_to_path(const std::string& utf8) {
+    wchar_t wide[MAX_PATH];
+    int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, wide, MAX_PATH);
+    if (len == 0) return std::filesystem::path(utf8);
+    return std::filesystem::path(wide);
+}
+
+static std::string path_to_utf8(const std::filesystem::path& p) {
+    std::wstring w = p.wstring();
+    int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0, NULL, NULL);
+    if (len == 0) return std::string();
+    std::string result(len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &result[0], len, NULL, NULL);
+    return result;
+}
+
 void convert_media(const std::string& path)
 {
-    std::string stem = std::filesystem::path(path).stem().string();
+    std::string stem = path_to_utf8(std::filesystem::path(path).stem());
     ffmpeg_convert_audio(path, "sounds/" + stem + ".wav");
     ffmpeg_extract_thumbnail(path, "sounds/" + stem + ".ppm");
 }
@@ -84,12 +100,12 @@ void download_from_url(const std::string& url, bool& out_success, std::string& o
     for (auto& entry : std::filesystem::directory_iterator(tmp_dir)) {
         if (!entry.is_regular_file()) continue;
         auto ext = entry.path().extension().string();
-        auto stem = entry.path().stem().string();
+        auto stem_u8 = path_to_utf8(entry.path().stem());
 
-        // Sanitize filename — remove characters illegal in Windows filenames + non-ASCII
+        // Sanitize filename — remove characters illegal in Windows filenames
         std::string safe_name;
-        for (char c : stem) {
-            if ((unsigned char)c > 127 || c == '<' || c == '>' || c == ':' || c == '"' || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*')
+        for (unsigned char c : stem_u8) {
+            if (c == '<' || c == '>' || c == ':' || c == '"' || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*')
                 safe_name += '_';
             else
                 safe_name += c;
@@ -99,7 +115,7 @@ void download_from_url(const std::string& url, bool& out_success, std::string& o
         for (auto& c : lower_ext) c = (char)std::tolower(c);
 
         if (lower_ext == ".wav") {
-            std::string dest = sounds_dir + "\\" + safe_name + ".wav";
+            std::filesystem::path dest = utf8_to_path(sounds_dir + "\\" + safe_name + ".wav");
             std::error_code ec;
             std::filesystem::rename(entry.path(), dest, ec);
             if (ec) std::filesystem::copy_file(entry.path(), dest, std::filesystem::copy_options::overwrite_existing, ec);
@@ -110,18 +126,16 @@ void download_from_url(const std::string& url, bool& out_success, std::string& o
             std::string tmp_audio = tmp_dir + "\\tmp_convert" + ext;
             std::error_code ec;
             std::filesystem::rename(entry.path(), tmp_audio, ec);
-            if (ec) { tmp_audio = entry.path().string(); }
+            if (ec) { tmp_audio = path_to_utf8(entry.path()); }
             ffmpeg_convert_audio(tmp_audio, sounds_dir + "\\" + safe_name + ".wav");
         }
         else if (lower_ext == ".jpg" || lower_ext == ".jpeg" || lower_ext == ".png" ||
                  lower_ext == ".ppm") {
+            std::filesystem::path dest = utf8_to_path(sounds_dir + "\\" + safe_name + ext);
+            std::error_code ec;
             if (lower_ext != ".ppm") {
-                std::string dest = sounds_dir + "\\" + safe_name + ext;
-                std::error_code ec;
                 std::filesystem::copy_file(entry.path(), dest, std::filesystem::copy_options::overwrite_existing, ec);
             } else {
-                std::string dest = sounds_dir + "\\" + safe_name + ".ppm";
-                std::error_code ec;
                 std::filesystem::rename(entry.path(), dest, ec);
             }
         }
@@ -145,7 +159,7 @@ void handle_dropped_files(const std::vector<std::string>& paths)
 
             if (lower.ends_with(".mp3") || lower.ends_with(".wav") || lower.ends_with(".ogg"))
             {
-                std::string dest = "sounds/" + std::filesystem::path(path).filename().string();
+                std::filesystem::path dest = utf8_to_path("sounds/" + path_to_utf8(std::filesystem::path(path).filename()));
                 std::error_code ec;
                 std::filesystem::copy_file(path, dest, std::filesystem::copy_options::overwrite_existing, ec);
             }

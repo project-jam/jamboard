@@ -5,6 +5,37 @@
 #include <cstring>
 #include <algorithm>
 #include <filesystem>
+#include <windows.h>
+
+// Convert UTF-8 path to 8.3 short path so miniaudio (which uses fopen) can handle unicode
+static std::string short_path(const std::string& utf8) {
+    wchar_t wide[MAX_PATH];
+    int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, wide, MAX_PATH);
+    if (len == 0) return utf8;
+    wchar_t short_w[MAX_PATH];
+    DWORD slen = GetShortPathNameW(wide, short_w, MAX_PATH);
+    if (slen == 0) return utf8;
+    char result[MAX_PATH * 3];
+    int rlen = WideCharToMultiByte(CP_UTF8, 0, short_w, -1, result, sizeof(result), NULL, NULL);
+    if (rlen == 0) return utf8;
+    return result;
+}
+
+static std::filesystem::path utf8_to_path(const std::string& utf8) {
+    wchar_t wide[MAX_PATH];
+    int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, wide, MAX_PATH);
+    if (len == 0) return std::filesystem::path(utf8);
+    return std::filesystem::path(wide);
+}
+
+static std::string path_to_utf8(const std::filesystem::path& p) {
+    std::wstring w = p.wstring();
+    int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0, NULL, NULL);
+    if (len == 0) return std::string();
+    std::string result(len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &result[0], len, NULL, NULL);
+    return result;
+}
 
 // ================= INIT =================
 
@@ -88,7 +119,8 @@ bool setup_audio_routing()
             virtual_engine_initialized = true;
     }
 
-    if (selected_mic_idx > 0 &&
+    if (mic_passthrough_enabled &&
+        selected_mic_idx > 0 &&
         selected_mic_idx - 1 < (int)captureDeviceCount &&
         selected_virtual_idx > 0 &&
         selected_virtual_idx - 1 < (int)playbackDeviceCount)
@@ -159,7 +191,7 @@ void play_sound(Sound& sound)
     if (speakers_engine_initialized) {
         v.spk = new ma_sound();
         ma_sound_init_from_file(&engine_speakers,
-            sound.path.c_str(),
+            short_path(sound.path).c_str(),
             0,
             NULL,
             NULL,
@@ -180,7 +212,7 @@ void play_sound(Sound& sound)
     if (virtual_engine_initialized) {
         v.vrt = new ma_sound();
         ma_sound_init_from_file(&engine_virtual,
-            sound.path.c_str(),
+            short_path(sound.path).c_str(),
             0,
             NULL,
             NULL,
@@ -285,18 +317,16 @@ void load_sounds(const std::string& folder)
     {
         if (!entry.is_regular_file()) continue;
 
-        auto path = entry.path().string();
+        auto ext = entry.path().extension().string();
 
-        if (path.ends_with(".mp3") ||
-            path.ends_with(".wav") ||
-            path.ends_with(".ogg"))
+        if (ext == ".mp3" || ext == ".wav" || ext == ".ogg")
         {
             auto s = std::make_unique<Sound>();
-            s->name = entry.path().stem().string();
-            s->path = path;
+            s->name = path_to_utf8(entry.path().stem());
+            s->path = path_to_utf8(entry.path());
 
             ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
-            if (ma_decoder_init_file(path.c_str(), &cfg, &s->vis_decoder) == MA_SUCCESS)
+            if (ma_decoder_init_file(short_path(s->path).c_str(), &cfg, &s->vis_decoder) == MA_SUCCESS)
                 s->vis_ready = true;
 
             sounds.push_back(std::move(s));
@@ -317,7 +347,7 @@ void delete_sound(Sound* sound)
     std::error_code ec;
     std::string stem = "sounds/" + sound->name;
     for (auto ext : { ".mp3", ".wav", ".ogg", ".jpg", ".jpeg", ".png", ".bmp", ".tga", ".ppm" })
-        std::filesystem::remove(stem + ext, ec);
+        std::filesystem::remove(utf8_to_path(stem + ext), ec);
 
     sounds.erase(
         std::remove_if(sounds.begin(), sounds.end(),
@@ -349,19 +379,19 @@ void rename_sound(Sound* sound, const std::string& new_name)
     }
 
     std::error_code ec;
-    std::filesystem::rename(sound->path, new_stem + ext, ec);
+    std::filesystem::rename(utf8_to_path(sound->path), utf8_to_path(new_stem + ext), ec);
     if (ec) {
         if (had_vis) {
             ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
-            if (ma_decoder_init_file(sound->path.c_str(), &cfg, &sound->vis_decoder) == MA_SUCCESS)
+            if (ma_decoder_init_file(short_path(sound->path).c_str(), &cfg, &sound->vis_decoder) == MA_SUCCESS)
                 sound->vis_ready = true;
         }
         return;
     }
 
-    std::filesystem::rename(old_stem + ".jpg", new_stem + ".jpg", ec);
+    std::filesystem::rename(utf8_to_path(old_stem + ".jpg"), utf8_to_path(new_stem + ".jpg"), ec);
     ec.clear();
-    std::filesystem::rename(old_stem + ".ppm", new_stem + ".ppm", ec);
+    std::filesystem::rename(utf8_to_path(old_stem + ".ppm"), utf8_to_path(new_stem + ".ppm"), ec);
 
     sound->name = new_name;
     sound->path = new_stem + ext;
@@ -369,7 +399,7 @@ void rename_sound(Sound* sound, const std::string& new_name)
     // Re-init vis decoder with new path
     if (had_vis) {
         ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
-        if (ma_decoder_init_file(sound->path.c_str(), &cfg, &sound->vis_decoder) == MA_SUCCESS)
+        if (ma_decoder_init_file(short_path(sound->path).c_str(), &cfg, &sound->vis_decoder) == MA_SUCCESS)
             sound->vis_ready = true;
     }
 

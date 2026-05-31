@@ -233,3 +233,4 @@ extern bool virtual_muted;
 extern bool deafen;
 extern bool program_files_mode;
 extern bool scrub_enabled;
+extern bool mic_passthrough_enabled;

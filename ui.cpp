@@ -43,12 +43,15 @@ int seek_cooldown_frames = 0;
 
 static char search_filter[128] = "";
 static Sound* pending_delete_sound = nullptr;
+static Sound* delete_confirm_sound = nullptr;
+static char delete_confirm_name[256] = {};
 static Sound* renaming_sound = nullptr;
 static Sound* properties_sound = nullptr;
 
 static char rename_buf[128] = {};
 static bool open_rename_popup = false;
 static bool open_properties_popup = false;
+static bool open_delete_popup = false;
 
 static unsigned int load_texture_from_file(const char* filename) {
     int width, height, channels;
@@ -348,7 +351,9 @@ void draw_ui() {
                 ImGui::Separator();
                 ImGui::Spacing();
                 if (ImGui::Button("Delete This Sound", ImVec2(-1, 28))) {
-                    pending_delete_sound = current_selected_sound;
+                    delete_confirm_sound = current_selected_sound;
+                    snprintf(delete_confirm_name, sizeof(delete_confirm_name), "%s", current_selected_sound->name.c_str());
+                    open_delete_popup = true;
                 }
             } else {
                 ImGui::TextDisabled("Select a track\nfrom the grid.");
@@ -489,10 +494,13 @@ void draw_ui() {
                         }
                         ImGui::Separator();
                         if (ImGui::MenuItem("Delete Sound", "Del")) {
-                            pending_delete_sound = s.get();
+                            delete_confirm_sound = s.get();
+                            snprintf(delete_confirm_name, sizeof(delete_confirm_name), "%s", s->name.c_str());
+                            open_delete_popup = true;
                         }
-                        ImGui::EndPopup();
-                    }
+        ImGui::EndPopup();
+    }
+
                     ImGui::PopID();
                 }
                 ImGui::EndTable();
@@ -1156,7 +1164,8 @@ void draw_ui() {
                     if (std::filesystem::exists(p)) {
                         is_converting = true;
                         std::thread([p]() {
-                            std::string b = std::filesystem::path(p).stem().string();
+                            auto b_u8 = std::filesystem::path(p).stem().u8string();
+                            std::string b((const char*)b_u8.data(), b_u8.size());
                             ffmpeg_convert_audio(p, "sounds/" + b + ".wav");
                             ffmpeg_extract_thumbnail(p, "sounds/" + b + ".ppm");
                             is_converting = false;
@@ -1219,7 +1228,7 @@ void draw_ui() {
                 }, nullptr, playbackDeviceCount + 1)) {}
 
             ImGui::SetNextItemWidth(400);
-            if (ImGui::Combo("Microphone Input (Passthrough to Virtual Cable)",
+            if (ImGui::Combo("Microphone Input",
                 &selected_mic_idx,
                 [](void*, int idx) -> const char* {
                     static char buf[512];
@@ -1232,6 +1241,15 @@ void draw_ui() {
                         snprintf(buf, sizeof(buf), "%s", captureDevices[dev].name);
                     return buf;
                 }, nullptr, captureDeviceCount + 1)) {}
+
+            bool mic_pt = mic_passthrough_enabled;
+            if (ImGui::Checkbox("Enable Mic Passthrough", &mic_pt)) {
+                mic_passthrough_enabled = mic_pt;
+                setup_audio_routing();
+                save_config_to_json();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("(person's voice goes to virtual cable)");
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -1280,6 +1298,27 @@ void draw_ui() {
         }
 
         ImGui::EndTabBar();
+    }
+
+    // Confirm Delete popup — open deferred (safe, outside any popup scope)
+    if (open_delete_popup) {
+        ImGui::OpenPopup("Confirm Delete");
+        open_delete_popup = false;
+    }
+    if (delete_confirm_sound && ImGui::BeginPopupModal("Confirm Delete", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Are you sure you want to delete \"%s\"?", delete_confirm_name);
+        ImGui::Spacing();
+        if (ImGui::Button("Delete", ImVec2(120, 0))) {
+            pending_delete_sound = delete_confirm_sound;
+            delete_confirm_sound = nullptr;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            delete_confirm_sound = nullptr;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     // Rename Sound popup — open deferred (safe, outside any popup scope)

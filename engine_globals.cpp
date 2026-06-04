@@ -40,3 +40,5 @@ bool deafen = false;
 bool program_files_mode = false;
 bool scrub_enabled = false;
 bool mic_passthrough_enabled = false;
+int vis_fps_mode = 0; // 0 = auto, 1 = manual
+int vis_fps = 30;     // manual target FPS

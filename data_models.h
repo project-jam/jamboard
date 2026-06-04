@@ -146,6 +146,9 @@ struct SoundVoice {
     std::chrono::steady_clock::time_point play_start;
     bool paused = false;
     float paused_cursor = 0.0f;
+    float cached_vol = -1.0f;
+    float cached_pitch = -1.0f;
+    float cached_pan = -999.0f;
 };
 
 struct SoundFxChain {
@@ -202,6 +205,7 @@ struct Sound {
     ma_decoder vis_decoder;
     bool vis_ready = false;
     unsigned int thumb_tex_id = 0;
+    ma_uint64 cached_total_frames = 0;
     SoundFxChain* fx_chain = nullptr;
     std::vector<SoundVoice> active_voices;
 
@@ -234,3 +238,5 @@ extern bool deafen;
 extern bool program_files_mode;
 extern bool scrub_enabled;
 extern bool mic_passthrough_enabled;
+extern int vis_fps_mode;
+extern int vis_fps;

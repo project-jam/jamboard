@@ -19,6 +19,8 @@ void save_config_to_json() {
     j["hardware"]["program_files"] = program_files_mode;
     j["hardware"]["scrub_enabled"] = scrub_enabled;
     j["hardware"]["mic_passthrough_enabled"] = mic_passthrough_enabled;
+    j["hardware"]["vis_fps_mode"] = vis_fps_mode;
+    j["hardware"]["vis_fps"] = vis_fps;
 
     for (const auto& s : sounds) {
         json sj;
@@ -159,6 +161,8 @@ void load_config_from_json() {
         deafen = j["hardware"].value("deafen", false);
         scrub_enabled = j["hardware"].value("scrub_enabled", false);
         mic_passthrough_enabled = j["hardware"].value("mic_passthrough_enabled", false);
+        vis_fps_mode = j["hardware"].value("vis_fps_mode", 0);
+        vis_fps = j["hardware"].value("vis_fps", 30);
     }
 
     if (j.contains("profiles")) {

@@ -109,6 +109,109 @@ int main() {
     };
     io.Fonts->AddFontFromFileTTF(font_path.c_str(), 12.0f, &font_cfg, ranges);
 
+    // Load system fallback font for glyphs zpix doesn't cover (Cyrillic, Arabic, Thai, etc.)
+    {
+        const char* fallback_path = nullptr;
+#ifdef _WIN32
+        fallback_path = "C:\\Windows\\Fonts\\segoeui.ttf";
+#elif __APPLE__
+        fallback_path = "/System/Library/Fonts/Supplemental/Arial.ttf";
+#else
+        static const char* linux_fonts[] = {
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+        };
+        for (auto p : linux_fonts) {
+            if (std::filesystem::exists(p)) { fallback_path = p; break; }
+        }
+#endif
+        if (fallback_path && std::filesystem::exists(fallback_path)) {
+            ImFontConfig fallback_cfg;
+            fallback_cfg.MergeMode = true;
+            fallback_cfg.PixelSnapH = true;
+            fallback_cfg.OversampleH = 1;
+            fallback_cfg.OversampleV = 1;
+            static const ImWchar fallback_ranges[] = {
+                0x0020, 0x00FF,
+                0x0100, 0x024F,
+                0x0250, 0x02AF,
+                0x0370, 0x03FF,
+                0x0400, 0x052F,
+                0x0530, 0x058F,
+                0x0590, 0x05FF,
+                0x0600, 0x06FF,
+                0x0750, 0x077F,
+                0x08A0, 0x08FF,
+                0x0900, 0x097F,
+                0x0980, 0x09FF,
+                0x0A00, 0x0AFF,
+                0x0B00, 0x0B7F,
+                0x0B80, 0x0BFF,
+                0x0C00, 0x0C7F,
+                0x0C80, 0x0CFF,
+                0x0D00, 0x0D7F,
+                0x0E00, 0x0E7F,
+                0x0E80, 0x0EFF,
+                0x1000, 0x109F,
+                0x10A0, 0x10FF,
+                0x1100, 0x11FF,
+                0x1200, 0x137F,
+                0x13A0, 0x13FF,
+                0x1400, 0x167F,
+                0x1E00, 0x1EFF,
+                0x2000, 0x206F,
+                0x2070, 0x209F,
+                0x20A0, 0x20CF,
+                0x2100, 0x214F,
+                0x2150, 0x218F,
+                0x2190, 0x21FF,
+                0x2200, 0x22FF,
+                0x2300, 0x23FF,
+                0x2400, 0x243F,
+                0x2460, 0x24FF,
+                0x2500, 0x257F,
+                0x2580, 0x259F,
+                0x25A0, 0x25FF,
+                0x2600, 0x26FF,
+                0x2700, 0x27BF,
+                0x27C0, 0x27EF,
+                0x27F0, 0x27FF,
+                0x2900, 0x297F,
+                0x2980, 0x29FF,
+                0x2A00, 0x2AFF,
+                0x2C00, 0x2C5F,
+                0x2C60, 0x2C7F,
+                0x2C80, 0x2CFF,
+                0x2D00, 0x2D2F,
+                0x2D30, 0x2D7F,
+                0x2D80, 0x2DDF,
+                0x2E00, 0x2E7F,
+                0xA000, 0xA4CF,
+                0xAC00, 0xD7AF,
+                0x1D000, 0x1D2FF, // Byzantine Musical Symbols, Mathematical Alphanumeric Symbols
+                0x1D300, 0x1D37F, // Tai Xuan Jing Symbols
+                0x1F000, 0x1F02F, // Mahjong Tiles
+                0x1F030, 0x1F09F, // Domino Tiles
+                0x1F0A0, 0x1F0FF, // Playing Cards
+                0x1F100, 0x1F1FF, // Enclosed Alphanumeric Supplement
+                0x1F200, 0x1F2FF, // Enclosed Ideographic Supplement
+                0x1F300, 0x1F5FF, // Miscellaneous Symbols and Pictographs
+                0x1F600, 0x1F64F, // Emoticons
+                0x1F680, 0x1F6FF, // Transport and Map Symbols
+                0x1F700, 0x1F77F, // Alchemical Symbols
+                0x1F780, 0x1F7FF, // Geometric Shapes Extended
+                0x1F800, 0x1F8FF, // Supplemental Arrows-C
+                0x1F900, 0x1F9FF, // Supplemental Symbols and Pictographs
+                0x1FA00, 0x1FA6F, // Chess Symbols
+                0x1FA70, 0x1FAFF, // Symbols and Pictographs Extended-A
+                0, 0
+            };
+            io.Fonts->AddFontFromFileTTF(fallback_path, 12.0f, &fallback_cfg, fallback_ranges);
+        }
+    }
+
     ImGui_ImplGlfw_InitForOpenGL(g_window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
 
@@ -116,9 +219,17 @@ int main() {
 
     const int DEAFEN_KEY = GLFW_KEY_F13;
     static bool prev_deafen_key = false;
+    int idle_frames = 0;
+    bool has_any_hotkey = false;
 
     while (!glfwWindowShouldClose(g_window)) {
-        glfwPollEvents();
+        // Idle detection: when no audio and no interaction, throttle to ~10fps
+        bool is_idle = (idle_frames > 120); // ~2 seconds of no activity
+        if (is_idle) {
+            glfwWaitEventsTimeout(0.1);
+        } else {
+            glfwPollEvents();
+        }
 
         // Deafen toggle hotkey
         {
@@ -126,6 +237,7 @@ int main() {
             if (held && !prev_deafen_key) {
                 set_deafen(!deafen);
                 save_config_to_json();
+                idle_frames = 0;
             }
             prev_deafen_key = held;
         }
@@ -136,24 +248,34 @@ int main() {
                     g_capturing_hotkey_sound->hotkey = k;
                     save_config_to_json();
                     g_capturing_hotkey_sound = nullptr;
+                    has_any_hotkey = true;
                     break;
                 }
             }
         } else {
-            for (auto& s : sounds) {
-                if (s->hotkey >= 0 && s->hotkey < 512) {
-                    bool held = glfwGetKey(g_window, s->hotkey) == GLFW_PRESS;
-                    if (held && !prev_keys[s->hotkey]) {
-                        if (s->play_mode == PLAY_RESTART) play_sound(*s);
-                        else if (s->play_mode == PLAY_PAUSE) {
-                            if (!s->active_voices.empty()) toggle_pause_sound(*s);
-                            else play_sound(*s);
+            // Recompute hotkey presence when sounds change
+            if (has_any_hotkey == false && !sounds.empty()) {
+                for (auto& s : sounds) {
+                    if (s->hotkey >= 0) { has_any_hotkey = true; break; }
+                }
+            }
+            if (has_any_hotkey) {
+                for (auto& s : sounds) {
+                    if (s->hotkey >= 0 && s->hotkey < 512) {
+                        bool held = glfwGetKey(g_window, s->hotkey) == GLFW_PRESS;
+                        if (held && !prev_keys[s->hotkey]) {
+                            if (s->play_mode == PLAY_RESTART) play_sound(*s);
+                            else if (s->play_mode == PLAY_PAUSE) {
+                                if (!s->active_voices.empty()) toggle_pause_sound(*s);
+                                else play_sound(*s);
+                            }
+                            else if (s->play_mode == PLAY_STOP) {
+                                if (is_sound_playing(*s)) stop_sound(*s); else play_sound(*s);
+                            }
+                            idle_frames = 0;
                         }
-                        else if (s->play_mode == PLAY_STOP) {
-                            if (is_sound_playing(*s)) stop_sound(*s); else play_sound(*s);
-                        }
+                        prev_keys[s->hotkey] = held;
                     }
-                    prev_keys[s->hotkey] = held;
                 }
             }
         }
@@ -162,7 +284,7 @@ int main() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        draw_ui();
+        bool has_active_audio = draw_ui();
 
         ImGui::Render();
         int display_w, display_h;
@@ -172,6 +294,13 @@ int main() {
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(g_window);
+
+        // Track idle state
+        if (has_active_audio || io.WantCaptureMouse || io.WantCaptureKeyboard) {
+            idle_frames = 0;
+        } else {
+            idle_frames++;
+        }
     }
 
     shutdown_ui();

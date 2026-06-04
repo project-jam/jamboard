@@ -10,6 +10,7 @@
 #include "import.h"
 #include "config.h"
 #include "update_checker.h"
+#include "myinstants.h"
 #include "imgui.h"
 
 #define GLFW_INCLUDE_NONE
@@ -99,6 +100,76 @@ static std::string fmt_time(float sec) {
     return buf;
 }
 
+// Helper: normalize Unicode — convert Mathematical Alphanumeric Symbols to plain Latin
+// so fonts that don't have these niche glyphs can still display the text
+static std::string normalize_unicode(const std::string& input) {
+    std::string result;
+    result.reserve(input.size());
+    size_t i = 0;
+    while (i < input.size()) {
+        unsigned char c = input[i];
+        char32_t codepoint = 0;
+        int len = 0;
+
+        if (c < 0x80) {
+            codepoint = c;
+            len = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            codepoint = c & 0x1F;
+            len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            codepoint = c & 0x0F;
+            len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            codepoint = c & 0x07;
+            len = 4;
+        } else {
+            i++;
+            continue;
+        }
+
+        for (int j = 1; j < len && i + j < input.size(); j++) {
+            unsigned char b = input[i + j];
+            if ((b & 0xC0) != 0x80) { len = j; break; }
+            codepoint = (codepoint << 6) | (b & 0x3F);
+        }
+
+        // Map Mathematical Alphanumeric Symbols (U+1D400-U+1D6A3) to plain Latin
+        if (codepoint >= 0x1D400 && codepoint <= 0x1D6A3) {
+            int offset = codepoint - 0x1D400;
+            int block_offset = offset % 52;
+            if (block_offset < 26)
+                codepoint = (char32_t)('A' + block_offset);
+            else
+                codepoint = (char32_t)('a' + (block_offset - 26));
+        }
+
+        // Encode back to UTF-8
+        if (codepoint < 0x80) {
+            result += (char)codepoint;
+        } else if (codepoint < 0x800) {
+            result += (char)(0xC0 | (codepoint >> 6));
+            result += (char)(0x80 | (codepoint & 0x3F));
+        } else if (codepoint < 0x10000) {
+            result += (char)(0xE0 | (codepoint >> 12));
+            result += (char)(0x80 | ((codepoint >> 6) & 0x3F));
+            result += (char)(0x80 | (codepoint & 0x3F));
+        } else {
+            result += (char)(0xF0 | (codepoint >> 18));
+            result += (char)(0x80 | ((codepoint >> 12) & 0x3F));
+            result += (char)(0x80 | ((codepoint >> 6) & 0x3F));
+            result += (char)(0x80 | (codepoint & 0x3F));
+        }
+
+        i += len;
+    }
+    return result;
+}
+
+static std::string display_name(const std::string& name) {
+    return normalize_unicode(name);
+}
+
 // Helper: reset button
 static void ResetBtn(const char* label, float* var, float val) {
     ImGui::SameLine();
@@ -141,7 +212,7 @@ static bool FxHeader(const char* label) {
     return ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
 }
 
-void draw_ui() {
+bool draw_ui() {
     // Process deferred sound deletion (safe, outside of any sound iteration)
     if (pending_delete_sound) {
         if (pending_delete_sound->thumb_tex_id != 0) {
@@ -186,23 +257,33 @@ void draw_ui() {
             float pitch = s->fx_enabled
                 ? s->fx.playback_speed * std::pow(2.0f, s->fx.pitch_semitones / 12.0f)
                 : 1.0f;
+            float pan = s->fx.pan;
 
-            for (auto sp : { voice.spk, voice.vrt }) {
-                if (!sp) continue;
-                ma_sound_set_volume(sp, vol);
-                ma_sound_set_pitch(sp, pitch);
-                ma_sound_set_pan(sp, s->fx.pan);
+            if (vol != voice.cached_vol || pitch != voice.cached_pitch || pan != voice.cached_pan) {
+                for (auto sp : { voice.spk, voice.vrt }) {
+                    if (!sp) continue;
+                    ma_sound_set_volume(sp, vol);
+                    ma_sound_set_pitch(sp, pitch);
+                    ma_sound_set_pan(sp, pan);
+                }
+                voice.cached_vol = vol;
+                voice.cached_pitch = pitch;
+                voice.cached_pan = pan;
             }
 
             if (s->trim_enabled && voice.spk) {
-                ma_uint64 cur_frame = 0, tot_frames = 0;
-                ma_sound_get_cursor_in_pcm_frames(voice.spk, &cur_frame);
-                ma_sound_get_length_in_pcm_frames(voice.spk, &tot_frames);
-                if (tot_frames > 0) {
-                    double progress = (double)cur_frame / (double)tot_frames;
+                if (s->cached_total_frames == 0) {
+                    ma_uint64 tf = 0;
+                    ma_sound_get_length_in_pcm_frames(voice.spk, &tf);
+                    s->cached_total_frames = tf;
+                }
+                if (s->cached_total_frames > 0) {
+                    ma_uint64 cur_frame = 0;
+                    ma_sound_get_cursor_in_pcm_frames(voice.spk, &cur_frame);
+                    double progress = (double)cur_frame / (double)s->cached_total_frames;
                     if (progress >= (double)s->trim_end) {
                         if (s->loop_track) {
-                            ma_uint64 start = (ma_uint64)(s->trim_start * tot_frames);
+                            ma_uint64 start = (ma_uint64)(s->trim_start * s->cached_total_frames);
                             ma_sound_seek_to_pcm_frame(voice.spk, start);
                             if (voice.vrt)
                                 ma_sound_seek_to_pcm_frame(voice.vrt, start);
@@ -250,7 +331,7 @@ void draw_ui() {
                 ImGui::EndChild();
 
                 ImGui::Spacing();
-                ImGui::TextWrapped("Track: %s", s.name.c_str());
+                ImGui::TextWrapped("Track: %s", display_name(s.name).c_str());
                 ImGui::Separator();
 
                 // Volume
@@ -352,7 +433,7 @@ void draw_ui() {
                 ImGui::Spacing();
                 if (ImGui::Button("Delete This Sound", ImVec2(-1, 28))) {
                     delete_confirm_sound = current_selected_sound;
-                    snprintf(delete_confirm_name, sizeof(delete_confirm_name), "%s", current_selected_sound->name.c_str());
+                    snprintf(delete_confirm_name, sizeof(delete_confirm_name), "%s", display_name(current_selected_sound->name).c_str());
                     open_delete_popup = true;
                 }
             } else {
@@ -392,7 +473,7 @@ void draw_ui() {
                     // --- Sound button ---
                     ImGui::PushID(s.get());
 
-                    std::string display = s->name;
+                    std::string display = display_name(s->name);
                     std::string hotkey_str;
                     if (s->hotkey >= 0) {
                         const char* kn = glfwGetKeyName(s->hotkey, 0);
@@ -438,7 +519,7 @@ void draw_ui() {
                     // --- Right-click context menu ---
                     if (ImGui::BeginPopupContextItem()) {
                         current_selected_sound = s.get();
-                        ImGui::Text("Sound: %s", s->name.c_str());
+                        ImGui::Text("Sound: %s", display_name(s->name).c_str());
                         ImGui::Separator();
                         if (ImGui::MenuItem("Properties")) {
                             properties_sound = s.get();
@@ -495,7 +576,7 @@ void draw_ui() {
                         ImGui::Separator();
                         if (ImGui::MenuItem("Delete Sound", "Del")) {
                             delete_confirm_sound = s.get();
-                            snprintf(delete_confirm_name, sizeof(delete_confirm_name), "%s", s->name.c_str());
+                            snprintf(delete_confirm_name, sizeof(delete_confirm_name), "%s", display_name(s->name).c_str());
                             open_delete_popup = true;
                         }
         ImGui::EndPopup();
@@ -528,9 +609,13 @@ void draw_ui() {
                             auto el = std::chrono::steady_clock::now() - voice.play_start;
                             v_cur = std::chrono::duration<float>(el).count() * (s->fx_enabled ? s->fx.playback_speed : 1.0f);
                         }
-                        ma_uint64 pf = 0;
-                        if (ma_sound_get_length_in_pcm_frames(voice.spk, &pf) == MA_SUCCESS && pf > 0)
-                            v_tot = (float)pf / (float)ma_engine_get_sample_rate(&engine_speakers);
+                        if (s->cached_total_frames == 0) {
+                            ma_uint64 pf = 0;
+                            if (ma_sound_get_length_in_pcm_frames(voice.spk, &pf) == MA_SUCCESS && pf > 0)
+                                s->cached_total_frames = pf;
+                        }
+                        if (s->cached_total_frames > 0)
+                            v_tot = (float)s->cached_total_frames / (float)ma_engine_get_sample_rate(&engine_speakers);
                     }
 
                     // Clickable name — selects sound without playing
@@ -539,7 +624,16 @@ void draw_ui() {
                         ImGui::PushStyleColor(ImGuiCol_Button,
                             ImVec4(0.2f, 0.5f, 0.8f, 1));
                     }
-                    if (ImGui::SmallButton(s->name.c_str())) {
+                    float name_max_w = sidebar_right_width - 65.0f - 55.0f - ImGui::GetStyle().FramePadding.x * 6.0f;
+                    std::string display = display_name(s->name);
+                    float text_w = ImGui::CalcTextSize(display.c_str()).x;
+                    if (text_w > name_max_w && name_max_w > 0) {
+                        float ellipsis_w = ImGui::CalcTextSize("...").x;
+                        while (!display.empty() && ImGui::CalcTextSize(display.c_str()).x + ellipsis_w > name_max_w)
+                            display.pop_back();
+                        display += "...";
+                    }
+                    if (ImGui::SmallButton(display.c_str())) {
                         current_selected_sound = s.get();
                     }
                     if (is_sel) ImGui::PopStyleColor();
@@ -605,10 +699,14 @@ void draw_ui() {
                     cur_sec = std::chrono::duration<float>(elapsed).count()
                         * (current_selected_sound->fx_enabled ? current_selected_sound->fx.playback_speed : 1.0f);
                 }
-                ma_uint64 tf = 0;
-                if (ma_sound_get_length_in_pcm_frames(tv, &tf) == MA_SUCCESS && tf > 0) {
+                if (current_selected_sound->cached_total_frames == 0) {
+                    ma_uint64 tf = 0;
+                    if (ma_sound_get_length_in_pcm_frames(tv, &tf) == MA_SUCCESS && tf > 0)
+                        current_selected_sound->cached_total_frames = tf;
+                }
+                if (current_selected_sound->cached_total_frames > 0) {
                     float sr = (float)ma_engine_get_sample_rate(&engine_speakers);
-                    tot_sec = (float)tf / sr;
+                    tot_sec = (float)current_selected_sound->cached_total_frames / sr;
                 } else if (current_selected_sound->vis_ready) {
                     ma_uint64 df;
                     if (ma_decoder_get_length_in_pcm_frames(
@@ -629,8 +727,12 @@ void draw_ui() {
             if (ImGui::IsItemActive()) {
                 is_user_dragging_slider = true;
                 if (scrub_enabled && tv && current_selected_sound) {
-                    ma_uint64 total_frames = 0;
-                    if (ma_sound_get_length_in_pcm_frames(tv, &total_frames) == MA_SUCCESS) {
+                    ma_uint64 total_frames = current_selected_sound->cached_total_frames;
+                    if (total_frames == 0) {
+                        if (ma_sound_get_length_in_pcm_frames(tv, &total_frames) == MA_SUCCESS)
+                            current_selected_sound->cached_total_frames = total_frames;
+                    }
+                    if (total_frames > 0) {
                         ma_uint64 target = (ma_uint64)(user_drag_progress * total_frames);
                         ma_sound_seek_to_pcm_frame(
                             current_selected_sound->active_voices.back().spk, target);
@@ -647,8 +749,12 @@ void draw_ui() {
                 }
             }
             if (ImGui::IsItemDeactivatedAfterEdit() && tv && current_selected_sound) {
-                ma_uint64 total_frames = 0;
-                if (ma_sound_get_length_in_pcm_frames(tv, &total_frames) == MA_SUCCESS) {
+                ma_uint64 total_frames = current_selected_sound->cached_total_frames;
+                if (total_frames == 0) {
+                    if (ma_sound_get_length_in_pcm_frames(tv, &total_frames) == MA_SUCCESS)
+                        current_selected_sound->cached_total_frames = total_frames;
+                }
+                if (total_frames > 0) {
                     ma_uint64 target = (ma_uint64)(user_drag_progress * total_frames);
                     ma_sound_seek_to_pcm_frame(
                         current_selected_sound->active_voices.back().spk, target);
@@ -682,7 +788,7 @@ void draw_ui() {
             {
                 int num_bars = (int)(canvas_size.x / 2.8f);
                 if (num_bars < 12) num_bars = 12;
-                if (num_bars > 300) num_bars = 300;
+                if (num_bars > 180) num_bars = 180;
 
                 // Big 3-second cache so we barely ever seek
                 static std::vector<float> cache;
@@ -691,8 +797,23 @@ void draw_ui() {
                 static Sound* cache_sound = nullptr;
                 static int seek_cooldown = 0;
 
-                float amps[300] = {};
+                float amps[180] = {};
                 bool live = false;
+
+                // Visualizer throttle — configurable FPS or auto mode
+                static double last_vis_time = 0.0;
+                double now = ImGui::GetTime();
+                double vis_interval;
+                if (vis_fps_mode == 0) {
+                    // Auto: 30fps when audio active, 10fps when idle
+                    vis_interval = engine_has_active_audio ? (1.0 / 30.0) : (1.0 / 10.0);
+                } else if (vis_fps <= 0) {
+                    vis_interval = 0.0; // uncapped
+                } else {
+                    vis_interval = 1.0 / (double)vis_fps;
+                }
+                bool vis_update = (now - last_vis_time) >= vis_interval;
+                if (vis_update) last_vis_time = now;
 
                 if (engine_has_active_audio && current_selected_sound &&
                     current_selected_sound->vis_ready && tot_sec > 0.0f)
@@ -705,74 +826,78 @@ void draw_ui() {
                         ma_uint32 ch = dec->outputChannels;
                         if (ch < 1) ch = 2;
 
-                        // Refill when outside safe range
-                        if (seek_cooldown > 0) seek_cooldown--;
-                        bool refill = (cache_sound != current_selected_sound) ||
-                                      cache_frames == 0 ||
-                                      cur_frame < cache_start ||
-                                      cur_frame + ch * 256 > cache_start + cache_frames;
+                        if (vis_update) {
+                            // Refill when outside safe range
+                            if (seek_cooldown > 0) seek_cooldown--;
+                            bool refill = (cache_sound != current_selected_sound) ||
+                                          cache_frames == 0 ||
+                                          cur_frame < cache_start ||
+                                          cur_frame + ch * 256 > cache_start + cache_frames;
 
-                        if (refill && seek_cooldown == 0) {
-                            seek_cooldown = 15;
-                            ma_uint64 cache_len = 144000 / ch; // ~3s @ 48kHz
-                            if (cache_len > 48000) cache_len = 48000;
+                            if (refill && seek_cooldown == 0) {
+                                seek_cooldown = 15;
+                                ma_uint64 cache_len = 144000 / ch; // ~3s @ 48kHz
+                                if (cache_len > 48000) cache_len = 48000;
 
-                            ma_uint64 seek_to = cur_frame;
-                            if (seek_to + cache_len > total_frames)
-                                seek_to = (total_frames > cache_len) ? total_frames - cache_len : 0;
+                                ma_uint64 seek_to = cur_frame;
+                                if (seek_to + cache_len > total_frames)
+                                    seek_to = (total_frames > cache_len) ? total_frames - cache_len : 0;
 
-                            if (ma_decoder_seek_to_pcm_frame(dec, seek_to) == MA_SUCCESS) {
-                                cache.resize(cache_len * ch);
-                                ma_uint64 frames_read = 0;
-                                ma_decoder_read_pcm_frames(dec, cache.data(), cache_len, &frames_read);
-                                cache_frames = frames_read;
-                                cache_start = seek_to;
-                                cache_sound = current_selected_sound;
+                                if (ma_decoder_seek_to_pcm_frame(dec, seek_to) == MA_SUCCESS) {
+                                    cache.resize(cache_len * ch);
+                                    ma_uint64 frames_read = 0;
+                                    ma_decoder_read_pcm_frames(dec, cache.data(), cache_len, &frames_read);
+                                    cache_frames = frames_read;
+                                    cache_start = seek_to;
+                                    cache_sound = current_selected_sound;
+                                }
                             }
-                        }
 
-                        // Read sliding window from cache — updates EVERY frame
-                        if (cache_frames > 0 && cache_sound == current_selected_sound) {
-                            int off = (int)((cur_frame - cache_start) * ch);
-                            if (off < 0) off = 0;
-                            int total = (int)(cache_frames * ch);
-                            int avail = total - off;
-                            if (avail > num_bars) {
-                                int spb = avail / num_bars;
-                                if (spb < 1) spb = 1;
+                            // Read sliding window from cache
+                            if (cache_frames > 0 && cache_sound == current_selected_sound) {
+                                int off = (int)((cur_frame - cache_start) * ch);
+                                if (off < 0) off = 0;
+                                int total = (int)(cache_frames * ch);
+                                int avail = total - off;
+                                if (avail > num_bars) {
+                                    int spb = avail / num_bars;
+                                    if (spb < 1) spb = 1;
 
-                                for (int b = 0; b < num_bars; b++) {
-                                    float sum = 0;
-                                    int cnt = 0;
-                                    for (int j = 0; j < spb; j++) {
-                                        int idx = off + b * spb + j;
-                                        if (idx >= 0 && idx < total) {
-                                            sum += std::fabs(cache[idx]);
-                                            cnt++;
+                                    for (int b = 0; b < num_bars; b++) {
+                                        float sum = 0;
+                                        int cnt = 0;
+                                        for (int j = 0; j < spb; j++) {
+                                            int idx = off + b * spb + j;
+                                            if (idx >= 0 && idx < total) {
+                                                sum += std::fabs(cache[idx]);
+                                                cnt++;
+                                            }
                                         }
+                                        amps[b] = cnt > 0 ? (sum / cnt) : 0.0f;
                                     }
-                                    amps[b] = cnt > 0 ? (sum / cnt) : 0.0f;
-                                }
 
-                                // Adaptive normalization: scale so the loudest bar fills ~90%
-                                float peak = 0.001f;
-                                for (int b = 0; b < num_bars; b++)
-                                    if (amps[b] > peak) peak = amps[b];
-                                float gain = (peak > 0.001f) ? (0.9f / peak) : 4.0f;
-                                if (gain > 8.0f) gain = 8.0f;
-                                for (int b = 0; b < num_bars; b++) {
-                                    amps[b] *= gain;
-                                    if (amps[b] > 1.0f) amps[b] = 1.0f;
-                                }
+                                    // Adaptive normalization: scale so the loudest bar fills ~90%
+                                    float peak = 0.001f;
+                                    for (int b = 0; b < num_bars; b++)
+                                        if (amps[b] > peak) peak = amps[b];
+                                    float gain = (peak > 0.001f) ? (0.9f / peak) : 4.0f;
+                                    if (gain > 8.0f) gain = 8.0f;
+                                    for (int b = 0; b < num_bars; b++) {
+                                        amps[b] *= gain;
+                                        if (amps[b] > 1.0f) amps[b] = 1.0f;
+                                    }
 
-                                live = true;
+                                    live = true;
+                                }
                             }
+                        } else {
+                            live = true;
                         }
                     }
                 }
 
                 // Frequency-spread bars + fast reaction
-                static float smooth[300];
+                static float smooth[180];
                 static float peak_hold = 0.0f;
                 float time = (float)ImGui::GetTime();
 
@@ -824,7 +949,7 @@ void draw_ui() {
             ImGui::Separator();
             for (auto& s : sounds) {
                 bool sel = (current_selected_sound == s.get());
-                if (ImGui::Selectable(s->name.c_str(), sel))
+                if (ImGui::Selectable(display_name(s->name).c_str(), sel))
                     current_selected_sound = s.get();
 
                 if (!s->fx_enabled) {
@@ -872,7 +997,7 @@ void draw_ui() {
                 auto& fx = s.fx;
                 auto save = []{ save_config_to_json(); };
 
-                ImGui::Text("Selected: %s", s.name.c_str());
+                ImGui::Text("Selected: %s", display_name(s.name).c_str());
                 bool fx_en = s.fx_enabled;
                 if (ImGui::Checkbox("FX Enabled", &fx_en)) {
                     s.fx_enabled = fx_en;
@@ -1176,6 +1301,89 @@ void draw_ui() {
             }
             ImGui::Spacing();
             ImGui::Separator();
+            ImGui::Spacing();
+
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Search MyInstants.com");
+
+            static char mi_search[128] = "";
+            static std::vector<MyInstant> mi_results;
+            static bool mi_searching = false;
+            static std::string mi_error;
+            static int mi_downloading_idx = -1;
+
+            ImGui::SetNextItemWidth(350);
+            ImGui::InputTextWithHint("##mi_search", "Search sounds...", mi_search, 128);
+            ImGui::SameLine();
+
+            if (mi_searching) {
+                ImGui::TextColored(ImVec4(1, 1, 0, 1), "Searching...");
+            } else {
+                bool do_search = ImGui::Button("Search", ImVec2(70, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter);
+                if (do_search && strlen(mi_search) > 0) {
+                    mi_searching = true;
+                    mi_error.clear();
+                    std::string q = mi_search;
+                    std::thread([q]() {
+                        mi_results = myinstants_search(q);
+                        if (mi_results.empty()) mi_error = "No results found.";
+                        mi_searching = false;
+                    }).detach();
+                }
+            }
+            ImGui::SameLine();
+            if (!mi_results.empty() && ImGui::Button("Clear", ImVec2(50, 0))) {
+                mi_results.clear();
+                mi_error.clear();
+            }
+
+            if (!mi_error.empty())
+                ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "%s", mi_error.c_str());
+
+            if (!mi_results.empty()) {
+                ImGui::TextDisabled("%d results", (int)mi_results.size());
+                ImGui::BeginChild("MyInstantsResults", ImVec2(0, 200), true);
+                for (int i = 0; i < (int)mi_results.size(); i++) {
+                    auto& item = mi_results[i];
+                    bool is_dl = (mi_downloading_idx == i);
+
+                    if (is_dl) {
+                        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Importing...");
+                    } else {
+                        ImGui::PushID(i);
+                        if (ImGui::SmallButton("Preview")) {
+                            myinstants_preview(item);
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Import")) {
+                            mi_downloading_idx = i;
+                            std::thread([item, i]() {
+                                std::string data_dir;
+                                if (program_files_mode) {
+                                    char* appdata = getenv("APPDATA");
+                                    if (appdata) data_dir = std::string(appdata) + "\\JamBoard";
+                                } else {
+                                    char buf[MAX_PATH];
+                                    GetFullPathNameA(".", MAX_PATH, buf, NULL);
+                                    data_dir = buf;
+                                }
+                                std::string sounds_dir = data_dir + "\\sounds";
+                                std::filesystem::create_directories(sounds_dir);
+                                myinstants_download(item, sounds_dir);
+                                mi_downloading_idx = -1;
+                                needs_sound_reload = true;
+                            }).detach();
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextWrapped("%s", item.name.c_str());
+                        ImGui::PopID();
+                    }
+                }
+                ImGui::EndChild();
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
                 "Tip: You can also drag & drop audio/video files onto the window.");
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
@@ -1280,11 +1488,40 @@ void draw_ui() {
             ImGui::Separator();
             ImGui::Spacing();
 
+            ImGui::Text("Visualizer Performance");
+            const char* fps_modes[] = { "Auto (30fps active / 10fps idle)", "Manual" };
+            ImGui::SetNextItemWidth(400);
+            if (ImGui::Combo("Visualizer FPS Mode", &vis_fps_mode, fps_modes, 2))
+                save_config_to_json();
+
+            if (vis_fps_mode == 1) {
+                ImGui::SetNextItemWidth(400);
+                const char* fps_labels[] = { "Uncapped", "15 FPS", "20 FPS", "24 FPS", "30 FPS", "60 FPS" };
+                int fps_values[] = { 0, 15, 20, 24, 30, 60 };
+                int current = 0;
+                for (int i = 0; i < 6; i++) {
+                    if (vis_fps == fps_values[i]) { current = i; break; }
+                }
+                if (ImGui::Combo("Visualizer FPS", &current, fps_labels, 6)) {
+                    vis_fps = fps_values[current];
+                    save_config_to_json();
+                }
+                ImGui::TextDisabled("Lower FPS = less CPU usage");
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
             if (ImGui::Button("Check for Updates")) {
                 check_for_updates();
             }
             ImGui::SameLine();
             ImGui::TextDisabled("Current: %s", JAMBOARD_VERSION);
+            if (!g_update_check_status.empty()) {
+                ImGui::SameLine();
+                ImGui::Text("| %s", g_update_check_status.c_str());
+            }
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -1328,7 +1565,7 @@ void draw_ui() {
     }
     if (renaming_sound && ImGui::BeginPopupModal("Rename Sound", NULL, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::Text("Enter new name for \"%s\":", renaming_sound->name.c_str());
+        ImGui::Text("Enter new name for \"%s\":", display_name(renaming_sound->name).c_str());
         ImGui::Spacing();
         ImGui::SetNextItemWidth(300);
         bool confirm = ImGui::InputText("##rename", rename_buf, sizeof(rename_buf),
@@ -1358,7 +1595,7 @@ void draw_ui() {
     }
     if (properties_sound && ImGui::BeginPopupModal("Properties", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
         auto& s = *properties_sound;
-        ImGui::Text("Name: %s", s.name.c_str());
+        ImGui::Text("Name: %s", display_name(s.name).c_str());
         ImGui::Text("Path: %s", s.path.c_str());
 
         if (s.vis_ready) {
@@ -1409,4 +1646,5 @@ void draw_ui() {
     }
 
     ImGui::End();
+    return engine_has_active_audio;
 }

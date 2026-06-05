@@ -26,7 +26,7 @@ static std::string http_get(const std::string& path) {
     cli.set_read_timeout(30);
     cli.set_default_headers({
         {"Accept", "application/vnd.github.v3+json"},
-        {"User-Agent", "JamBoard/3.7 (https://github.com/project-jam/jamboard)"}
+        {"User-Agent", "JamBoard/3.8 (https://github.com/project-jam/jamboard)"}
     });
 
     auto res = cli.Get(path);
@@ -38,10 +38,50 @@ static bool download_file(const std::string& host, const std::string& path, cons
     httplib::SSLClient cli(host);
     cli.set_connection_timeout(10);
     cli.set_read_timeout(300);
-    cli.set_default_headers({{"User-Agent", "JamBoard/3.7"}});
+    cli.set_default_headers({{"User-Agent", "JamBoard/3.8"}});
 
     auto res = cli.Get(path);
-    if (!res || res->status != 200) return false;
+    if (!res) return false;
+
+    // Follow redirects (301, 302, 303, 307, 308)
+    int attempts = 0;
+    while ((res->status == 301 || res->status == 302 || res->status == 303 ||
+            res->status == 307 || res->status == 308) && attempts < 5) {
+        std::string location;
+        for (auto& h : res->headers) {
+            if (h.first == "Location" || h.first == "location") {
+                location = h.second;
+                break;
+            }
+        }
+        if (location.empty()) break;
+
+        // Parse new host and path from location
+        std::string new_host = host;
+        std::string new_path = location;
+        if (location.find("://") != std::string::npos) {
+            auto scheme_end = location.find("://");
+            auto host_start = scheme_end + 3;
+            auto path_start = location.find("/", host_start);
+            if (path_start != std::string::npos) {
+                new_host = location.substr(host_start, path_start - host_start);
+                new_path = location.substr(path_start);
+            } else {
+                new_host = location.substr(host_start);
+                new_path = "/";
+            }
+        }
+
+        httplib::SSLClient new_cli(new_host);
+        new_cli.set_connection_timeout(10);
+        new_cli.set_read_timeout(300);
+        new_cli.set_default_headers({{"User-Agent", "JamBoard/3.8"}});
+        res = new_cli.Get(new_path);
+        if (!res) return false;
+        attempts++;
+    }
+
+    if (res->status != 200) return false;
 
     FILE* fp = fopen(out_path.c_str(), "wb");
     if (!fp) return false;
@@ -146,9 +186,14 @@ void download_and_install() {
         bool ok = download_file(host, path, installer_path);
         g_download_progress = false;
         if (ok) {
-            ShellExecuteA(NULL, "runas", installer_path.c_str(),
-                "/SILENT /SUPPRESSMSGBOXES", NULL, SW_SHOWNORMAL);
-            Sleep(1000);
+            SHELLEXECUTEINFOA sei = { sizeof(sei) };
+            sei.lpVerb = "runas";
+            sei.lpFile = installer_path.c_str();
+            sei.lpParameters = "/SILENT /SUPPRESSMSGBOXES /NORESTART";
+            sei.nShow = SW_SHOWNORMAL;
+            ShellExecuteExA(&sei);
+            // Wait for installer to start, then exit
+            Sleep(3000);
             ExitProcess(0);
         }
     }).detach();

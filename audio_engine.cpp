@@ -310,10 +310,14 @@ void load_sounds(const std::string& folder)
 {
     sounds.clear();
 
-    if (!std::filesystem::exists(folder))
-        std::filesystem::create_directory(folder);
+    std::string dir = folder;
+    if (!current_folder.empty())
+        dir = folder + "/" + current_folder;
 
-    for (auto& entry : std::filesystem::directory_iterator(folder))
+    if (!std::filesystem::exists(dir))
+        std::filesystem::create_directories(dir);
+
+    for (auto& entry : std::filesystem::directory_iterator(dir))
     {
         if (!entry.is_regular_file()) continue;
 
@@ -324,6 +328,7 @@ void load_sounds(const std::string& folder)
             auto s = std::make_unique<Sound>();
             s->name = path_to_utf8(entry.path().stem());
             s->path = path_to_utf8(entry.path());
+            s->folder = current_folder;
 
             ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
             if (ma_decoder_init_file(short_path(s->path).c_str(), &cfg, &s->vis_decoder) == MA_SUCCESS)
@@ -345,7 +350,9 @@ void delete_sound(Sound* sound)
     stop_sound(*sound);
 
     std::error_code ec;
-    std::string stem = "sounds/" + sound->name;
+    std::string stem = "sounds/" + sound->folder;
+    if (!stem.empty()) stem += "/";
+    stem += sound->name;
     for (auto ext : { ".mp3", ".wav", ".ogg", ".jpg", ".jpeg", ".png", ".bmp", ".tga", ".ppm" })
         std::filesystem::remove(utf8_to_path(stem + ext), ec);
 
@@ -359,8 +366,10 @@ void delete_sound(Sound* sound)
 
 void rename_sound(Sound* sound, const std::string& new_name)
 {
-    std::string old_stem = "sounds/" + sound->name;
-    std::string new_stem = "sounds/" + new_name;
+    std::string dir_prefix = "sounds/";
+    if (!sound->folder.empty()) dir_prefix += sound->folder + "/";
+    std::string old_stem = dir_prefix + sound->name;
+    std::string new_stem = dir_prefix + new_name;
 
     auto ext = std::filesystem::path(sound->path).extension().string();
 
@@ -404,4 +413,215 @@ void rename_sound(Sound* sound, const std::string& new_name)
     }
 
     save_config_to_json();
+}
+
+// ================= FOLDER MANAGEMENT =================
+
+static std::string get_sounds_dir() {
+    std::string dir = "sounds";
+    if (!current_folder.empty())
+        dir = "sounds/" + current_folder;
+    return dir;
+}
+
+void create_folder(const std::string& name)
+{
+    std::string dir = get_sounds_dir() + "/" + name;
+    std::filesystem::create_directories(dir);
+}
+
+void delete_folder(const std::string& folder_path)
+{
+    std::error_code ec;
+    std::filesystem::remove_all(utf8_to_path(folder_path), ec);
+}
+
+void rename_folder(const std::string& old_path, const std::string& new_name)
+{
+    std::error_code ec;
+    std::string parent = std::filesystem::path(old_path).parent_path().string();
+    std::filesystem::rename(utf8_to_path(old_path), utf8_to_path(parent + "/" + new_name), ec);
+}
+
+// ================= COPY / CUT / PASTE =================
+
+static void copy_sound_files(const std::string& src_stem, const std::string& dest_stem)
+{
+    std::error_code ec;
+    for (auto ext : { ".mp3", ".wav", ".ogg", ".jpg", ".jpeg", ".png", ".bmp", ".tga", ".ppm" }) {
+        std::string src = src_stem + ext;
+        std::string dst = dest_stem + ext;
+        if (std::filesystem::exists(utf8_to_path(src)))
+            std::filesystem::copy_file(utf8_to_path(src), utf8_to_path(dst),
+                std::filesystem::copy_options::overwrite_existing, ec);
+    }
+}
+
+static void move_sound_files(const std::string& src_stem, const std::string& dest_stem)
+{
+    std::error_code ec;
+    for (auto ext : { ".mp3", ".wav", ".ogg", ".jpg", ".jpeg", ".png", ".bmp", ".tga", ".ppm" }) {
+        std::string src = src_stem + ext;
+        std::string dst = dest_stem + ext;
+        if (std::filesystem::exists(utf8_to_path(src)))
+            std::filesystem::rename(utf8_to_path(src), utf8_to_path(dst), ec);
+    }
+}
+
+static void copy_directory_recursive(const std::filesystem::path& src, const std::filesystem::path& dst) {
+    std::error_code ec;
+    std::filesystem::create_directories(dst, ec);
+    for (auto& entry : std::filesystem::recursive_directory_iterator(src, ec)) {
+        auto rel = std::filesystem::relative(entry.path(), src, ec);
+        auto target = dst / rel;
+        if (entry.is_directory()) {
+            std::filesystem::create_directories(target, ec);
+        } else {
+            std::filesystem::copy_file(entry.path(), target,
+                std::filesystem::copy_options::overwrite_existing, ec);
+        }
+    }
+}
+
+void copy_sound_to_folder(Sound* sound, const std::string& dest_folder)
+{
+    std::string src_stem = "sounds/" + sound->folder;
+    if (!src_stem.empty() && src_stem.back() != '/') src_stem += "/";
+    src_stem += sound->name;
+
+    std::string dest_stem = "sounds/" + dest_folder;
+    if (!dest_stem.empty() && dest_stem.back() != '/') dest_stem += "/";
+    dest_stem += sound->name;
+
+    copy_sound_files(src_stem, dest_stem);
+}
+
+void cut_sound_to_folder(Sound* sound, const std::string& dest_folder)
+{
+    if (sound->vis_ready) {
+        ma_decoder_uninit(&sound->vis_decoder);
+        sound->vis_ready = false;
+    }
+    stop_sound(*sound);
+
+    std::string src_stem = "sounds/" + sound->folder;
+    if (!src_stem.empty() && src_stem.back() != '/') src_stem += "/";
+    src_stem += sound->name;
+
+    std::string dest_stem = "sounds/" + dest_folder;
+    if (!dest_stem.empty() && dest_stem.back() != '/') dest_stem += "/";
+    dest_stem += sound->name;
+
+    move_sound_files(src_stem, dest_stem);
+
+    auto ext = std::filesystem::path(sound->path).extension().string();
+    sound->path = dest_stem + ext;
+    sound->folder = dest_folder;
+
+    if (std::filesystem::exists(utf8_to_path(sound->path))) {
+        ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
+        if (ma_decoder_init_file(short_path(sound->path).c_str(), &cfg, &sound->vis_decoder) == MA_SUCCESS)
+            sound->vis_ready = true;
+    }
+
+    save_config_to_json();
+}
+
+void paste_clipboard()
+{
+    if (clipboard_type == CLIP_NONE) return;
+
+    if (clipboard_type == CLIP_SOUND) {
+        Sound* src = nullptr;
+        for (auto& s : sounds) {
+            if (s->path == clipboard_source_path) { src = s.get(); break; }
+        }
+
+        if (clipboard_is_cut) {
+            if (src) {
+                cut_sound_to_folder(src, current_folder);
+            } else {
+                // Sound not in current view (navigated away) — move files directly
+                std::string ext = std::filesystem::path(clipboard_source_path).extension().string();
+                std::string dest_stem = "sounds/" + current_folder;
+                if (!dest_stem.empty() && dest_stem.back() != '/') dest_stem += "/";
+                dest_stem += clipboard_source_name;
+
+                std::error_code ec;
+                std::string src_base = clipboard_source_path.substr(0, clipboard_source_path.length() - ext.length());
+                std::string dst_base = dest_stem;
+
+                std::string exts[] = { ext, ".jpg", ".jpeg", ".png", ".bmp", ".tga", ".ppm" };
+                for (auto& e : exts) {
+                    std::string s_file = src_base + e;
+                    std::string d_file = dst_base + e;
+                    if (std::filesystem::exists(utf8_to_path(s_file)))
+                        std::filesystem::rename(utf8_to_path(s_file), utf8_to_path(d_file), ec);
+                }
+            }
+            clipboard_type = CLIP_NONE;
+        } else {
+            if (src) {
+                copy_sound_to_folder(src, current_folder);
+            } else {
+                // Sound not in current view — copy files directly
+                std::string ext = std::filesystem::path(clipboard_source_path).extension().string();
+                std::string dest_stem = "sounds/" + current_folder;
+                if (!dest_stem.empty() && dest_stem.back() != '/') dest_stem += "/";
+                dest_stem += clipboard_source_name;
+
+                std::error_code ec;
+                std::string src_base = clipboard_source_path.substr(0, clipboard_source_path.length() - ext.length());
+                std::string dst_base = dest_stem;
+
+                std::string exts[] = { ext, ".jpg", ".jpeg", ".png", ".bmp", ".tga", ".ppm" };
+                for (auto& e : exts) {
+                    std::string s_file = src_base + e;
+                    std::string d_file = dst_base + e;
+                    if (std::filesystem::exists(utf8_to_path(s_file)))
+                        std::filesystem::copy_file(utf8_to_path(s_file), utf8_to_path(d_file),
+                            std::filesystem::copy_options::overwrite_existing, ec);
+                }
+            }
+        }
+    }
+    else if (clipboard_type == CLIP_FOLDER) {
+        if (clipboard_is_cut) {
+            std::string dest = "sounds/" + current_folder;
+            if (!dest.empty()) dest += "/";
+            dest += clipboard_source_name;
+            std::error_code ec;
+            std::filesystem::rename(utf8_to_path(clipboard_source_path), utf8_to_path(dest), ec);
+            clipboard_type = CLIP_NONE;
+        } else {
+            std::string dest = "sounds/" + current_folder;
+            if (!dest.empty()) dest += "/";
+            dest += clipboard_source_name;
+            std::error_code ec;
+            copy_directory_recursive(utf8_to_path(clipboard_source_path),
+                utf8_to_path(dest));
+        }
+    }
+
+    needs_sound_reload = true;
+}
+
+void copy_folder_to(const std::string& folder_name, const std::string& dest_folder)
+{
+    std::string src = "sounds/" + folder_name;
+    std::string dst = "sounds/" + dest_folder;
+    if (!dst.empty()) dst += "/";
+    dst += folder_name;
+    std::error_code ec;
+    copy_directory_recursive(utf8_to_path(src), utf8_to_path(dst));
+}
+
+void cut_folder_to(const std::string& folder_name, const std::string& dest_folder)
+{
+    std::string src = "sounds/" + folder_name;
+    std::string dst = "sounds/" + dest_folder;
+    if (!dst.empty()) dst += "/";
+    dst += folder_name;
+    std::error_code ec;
+    std::filesystem::rename(utf8_to_path(src), utf8_to_path(dst), ec);
 }

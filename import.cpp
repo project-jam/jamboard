@@ -152,20 +152,26 @@ void handle_dropped_files(const std::vector<std::string>& paths)
 
     is_converting = true;
     std::thread([paths_copy = paths]() {
-        std::filesystem::create_directories("sounds");
+        std::string dest_dir = "sounds";
+        if (!current_folder.empty())
+            dest_dir += "/" + current_folder;
+        std::filesystem::create_directories(dest_dir);
         for (const auto& path : paths_copy) {
             std::string lower = path;
             for (auto& c : lower) c = (char)std::tolower(c);
 
             if (lower.ends_with(".mp3") || lower.ends_with(".wav") || lower.ends_with(".ogg"))
             {
-                std::filesystem::path dest = utf8_to_path("sounds/" + path_to_utf8(std::filesystem::path(path).filename()));
+                std::filesystem::path dest = utf8_to_path(dest_dir + "/" + path_to_utf8(std::filesystem::path(path).filename()));
                 std::error_code ec;
                 std::filesystem::copy_file(path, dest, std::filesystem::copy_options::overwrite_existing, ec);
             }
             else
             {
-                convert_media(path);
+                // For non-audio files, convert to the dest_dir
+                std::string stem = path_to_utf8(std::filesystem::path(path).stem());
+                ffmpeg_convert_audio(path, dest_dir + "/" + stem + ".wav");
+                ffmpeg_extract_thumbnail(path, dest_dir + "/" + stem + ".ppm");
             }
         }
         is_converting = false;

@@ -136,7 +136,8 @@ void save_config_to_json() {
         sj["fx"]["limiter_threshold"] = s->fx.limiter_threshold;
         sj["fx"]["limiter_release"] = s->fx.limiter_release;
 
-        j["profiles"][s->name] = sj;
+        std::string profile_key = s->folder.empty() ? s->name : s->folder + "/" + s->name;
+        j["profiles"][profile_key] = sj;
     }
 
     std::ofstream file("config.json");
@@ -167,8 +168,9 @@ void load_config_from_json() {
 
     if (j.contains("profiles")) {
         for (auto& s : sounds) {
-            if (!j["profiles"].contains(s->name)) continue;
-            auto sj = j["profiles"][s->name];
+            std::string profile_key = s->folder.empty() ? s->name : s->folder + "/" + s->name;
+            if (!j["profiles"].contains(profile_key)) continue;
+            auto sj = j["profiles"][profile_key];
 
             s->play_mode = (PlayMode)sj.value("play_mode", 0);
             s->loop_track = sj.value("loop_track", false);

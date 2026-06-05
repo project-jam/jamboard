@@ -182,9 +182,12 @@ struct SoundFxChain {
     }
 };
 
+enum ClipboardType { CLIP_NONE, CLIP_SOUND, CLIP_FOLDER };
+
 struct Sound {
     std::string name;
     std::string path;
+    std::string folder;
 
     PlayMode play_mode = PLAY_RESTART;
     bool loop_track = false;
@@ -240,3 +243,9 @@ extern bool scrub_enabled;
 extern bool mic_passthrough_enabled;
 extern int vis_fps_mode;
 extern int vis_fps;
+
+extern std::string current_folder;
+extern ClipboardType clipboard_type;
+extern std::string clipboard_source_path;
+extern std::string clipboard_source_name;
+extern bool clipboard_is_cut;

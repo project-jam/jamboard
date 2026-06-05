@@ -223,10 +223,10 @@ int main() {
     bool has_any_hotkey = false;
 
     while (!glfwWindowShouldClose(g_window)) {
-        // Idle detection: when no audio and no interaction, throttle to ~10fps
-        bool is_idle = (idle_frames > 120); // ~2 seconds of no activity
+        // Idle detection: when no audio and no interaction, throttle to ~5fps
+        bool is_idle = (idle_frames > 120);
         if (is_idle) {
-            glfwWaitEventsTimeout(0.1);
+            glfwWaitEventsTimeout(0.2);
         } else {
             glfwPollEvents();
         }
@@ -278,6 +278,39 @@ int main() {
                     }
                 }
             }
+        }
+
+        // Ctrl+C / Ctrl+X / Ctrl+V clipboard shortcuts
+        {
+            ImGuiIO& io = ImGui::GetIO();
+            bool ctrl = io.KeyCtrl;
+            bool c = glfwGetKey(g_window, GLFW_KEY_C) == GLFW_PRESS;
+            bool x = glfwGetKey(g_window, GLFW_KEY_X) == GLFW_PRESS;
+            bool v = glfwGetKey(g_window, GLFW_KEY_V) == GLFW_PRESS;
+            static bool prev_c = false, prev_x = false, prev_v = false;
+
+            if (ctrl && !io.WantCaptureKeyboard) {
+                if (c && !prev_c && current_selected_sound) {
+                    clipboard_type = CLIP_SOUND;
+                    clipboard_source_path = current_selected_sound->path;
+                    clipboard_source_name = current_selected_sound->name;
+                    clipboard_is_cut = false;
+                    idle_frames = 0;
+                }
+                if (x && !prev_x && current_selected_sound) {
+                    clipboard_type = CLIP_SOUND;
+                    clipboard_source_path = current_selected_sound->path;
+                    clipboard_source_name = current_selected_sound->name;
+                    clipboard_is_cut = true;
+                    idle_frames = 0;
+                }
+                if (v && !prev_v && clipboard_type != CLIP_NONE) {
+                    paste_clipboard();
+                    needs_sound_reload = true;
+                    idle_frames = 0;
+                }
+            }
+            prev_c = c; prev_x = x; prev_v = v;
         }
 
         ImGui_ImplOpenGL3_NewFrame();

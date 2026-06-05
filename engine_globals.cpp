@@ -42,3 +42,9 @@ bool scrub_enabled = false;
 bool mic_passthrough_enabled = false;
 int vis_fps_mode = 0; // 0 = auto, 1 = manual
 int vis_fps = 30;     // manual target FPS
+
+std::string current_folder = "";
+ClipboardType clipboard_type = CLIP_NONE;
+std::string clipboard_source_path = "";
+std::string clipboard_source_name = "";
+bool clipboard_is_cut = false;

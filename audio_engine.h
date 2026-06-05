@@ -37,6 +37,15 @@ void set_virtual_muted(bool on);
 void delete_sound(Sound* sound);
 void rename_sound(Sound* sound, const std::string& new_name);
 
+void create_folder(const std::string& name);
+void delete_folder(const std::string& folder_path);
+void rename_folder(const std::string& old_path, const std::string& new_name);
+void copy_sound_to_folder(Sound* sound, const std::string& dest_folder);
+void cut_sound_to_folder(Sound* sound, const std::string& dest_folder);
+void paste_clipboard();
+void copy_folder_to(const std::string& folder_name, const std::string& dest_folder);
+void cut_folder_to(const std::string& folder_name, const std::string& dest_folder);
+
 void init_sound_fx_chain(Sound& sound);
 void init_all_sound_fx_chains();
 void destroy_all_sound_fx_chains();

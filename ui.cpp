@@ -54,6 +54,15 @@ static bool open_rename_popup = false;
 static bool open_properties_popup = false;
 static bool open_delete_popup = false;
 
+static char new_folder_buf[128] = {};
+static bool open_new_folder_popup = false;
+static char rename_folder_buf[128] = {};
+static bool open_rename_folder_popup = false;
+static std::string renaming_folder_path;
+
+static std::string delete_confirm_folder_path;
+static bool open_delete_folder_popup = false;
+
 static unsigned int load_texture_from_file(const char* filename) {
     int width, height, channels;
     unsigned char* data = stbi_load(filename, &width, &height, &channels, 4);
@@ -73,7 +82,9 @@ static unsigned int load_texture_from_file(const char* filename) {
 
 void init_ui_textures() {
     for (auto& s : sounds) {
-        std::string base = "sounds/" + s->name;
+        std::string base = "sounds/";
+        if (!s->folder.empty()) base += s->folder + "/";
+        base += s->name;
         for (auto ext : { ".ppm", ".jpg", ".jpeg", ".png", ".bmp", ".tga" }) {
             std::string img_path = base + ext;
             if (std::filesystem::exists(img_path)) {
@@ -91,6 +102,15 @@ void shutdown_ui() {
     }
 }
 
+static std::string path_to_utf8(const std::filesystem::path& p) {
+    std::wstring w = p.wstring();
+    int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0, NULL, NULL);
+    if (len == 0) return std::string();
+    std::string result(len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &result[0], len, NULL, NULL);
+    return result;
+}
+
 // Helper: format seconds to mm:ss
 static std::string fmt_time(float sec) {
     int m = (int)sec / 60;
@@ -98,6 +118,25 @@ static std::string fmt_time(float sec) {
     char buf[16];
     snprintf(buf, sizeof(buf), "%d:%02d", m, s);
     return buf;
+}
+
+static void draw_folder_icon(ImDrawList* dl, ImVec2 pos, float size) {
+    ImVec2 tl = pos;
+    ImVec2 br = ImVec2(pos.x + size, pos.y + size);
+    float tab_h = size * 0.25f;
+    float tab_w = size * 0.4f;
+
+    // Folder tab (darker)
+    ImVec4 tab_col = ImVec4(0.75f, 0.6f, 0.1f, 1.0f);
+    dl->AddRectFilled(tl, ImVec2(tl.x + tab_w, tl.y + tab_h), ImGui::ColorConvertFloat4ToU32(tab_col));
+
+    // Folder body
+    ImVec4 body_col = ImVec4(0.9f, 0.75f, 0.2f, 1.0f);
+    dl->AddRectFilled(ImVec2(tl.x, tl.y + tab_h), br, ImGui::ColorConvertFloat4ToU32(body_col));
+
+    // Border
+    ImVec4 border_col = ImVec4(0.6f, 0.48f, 0.08f, 1.0f);
+    dl->AddRect(tl, br, ImGui::ColorConvertFloat4ToU32(border_col));
 }
 
 // Helper: normalize Unicode — convert Mathematical Alphanumeric Symbols to plain Latin
@@ -449,142 +488,394 @@ bool draw_ui() {
             ImGui::InputTextWithHint("##Search", "Search sounds...", search_filter,
                 sizeof(search_filter));
 
-            int columns = 3;
-            if (grid_width > 650) columns = 5;
-            else if (grid_width > 500) columns = 4;
-            else if (grid_width > 350) columns = 3;
-            else columns = 2;
+            // Collect subdirectories in current folder
+            std::vector<std::string> subdirs;
+            {
+                std::string dir = "sounds";
+                if (!current_folder.empty()) dir += "/" + current_folder;
+                if (std::filesystem::exists(dir)) {
+                    for (auto& entry : std::filesystem::directory_iterator(dir)) {
+                        if (entry.is_directory()) {
+                            subdirs.push_back(path_to_utf8(entry.path().filename()));
+                        }
+                    }
+                    std::sort(subdirs.begin(), subdirs.end());
+                }
+            }
 
-            if (ImGui::BeginTable("SoundGrid", columns)) {
+            bool has_back = !current_folder.empty();
+            bool has_items = has_back || !subdirs.empty() || !sounds.empty();
+            bool filtered_empty = has_items && search_filter[0] != '\0';
+
+            // Show empty state if no items at all
+            if (!has_items) {
+                ImVec2 zone_size = ImGui::GetContentRegionAvail();
+                const char* msg = "drag and drop to upload a sound :)";
+                ImVec2 text_size = ImGui::CalcTextSize(msg);
+                ImGui::SetCursorPos(ImVec2(
+                    (zone_size.x - text_size.x) * 0.5f,
+                    (zone_size.y - text_size.y) * 0.5f
+                ));
+                ImGui::TextDisabled("%s", msg);
+            }
+            // Show filtered empty
+            else if (filtered_empty) {
+                bool any_match = false;
                 for (auto& s : sounds) {
-                    bool skip = false;
-                    if (search_filter[0]) {
-                        std::string lower_name = s->name;
-                        std::string lower_filter = search_filter;
-                        for (auto& c : lower_name) c = (char)std::tolower(c);
-                        for (auto& c : lower_filter) c = (char)std::tolower(c);
-                        if (lower_name.find(lower_filter) == std::string::npos)
-                            skip = true;
-                    }
+                    std::string lower_name = s->name;
+                    std::string lower_filter = search_filter;
+                    for (auto& c : lower_name) c = (char)std::tolower(c);
+                    for (auto& c : lower_filter) c = (char)std::tolower(c);
+                    if (lower_name.find(lower_filter) != std::string::npos) { any_match = true; break; }
+                }
+                if (!any_match) {
+                    ImVec2 zone_size = ImGui::GetContentRegionAvail();
+                    const char* msg = "No matching sounds found.";
+                    ImVec2 text_size = ImGui::CalcTextSize(msg);
+                    ImGui::SetCursorPos(ImVec2(
+                        (zone_size.x - text_size.x) * 0.5f,
+                        (zone_size.y - text_size.y) * 0.5f
+                    ));
+                    ImGui::TextDisabled("%s", msg);
+                }
+            }
 
-                    ImGui::TableNextColumn();
-                    if (skip) continue;
+            if (has_items) {
+                int columns = 3;
+                if (grid_width > 650) columns = 5;
+                else if (grid_width > 500) columns = 4;
+                else if (grid_width > 350) columns = 3;
+                else columns = 2;
 
-                    // --- Sound button ---
-                    ImGui::PushID(s.get());
+                if (ImGui::BeginTable("SoundGrid", columns)) {
+                    // Back button if inside a folder
+                    if (has_back) {
+                        ImGui::TableNextColumn();
+                        ImGui::PushID(-999);
+                        float btn_h = 34.0f;
+                        float icon_size = 16.0f;
+                        ImVec2 btn_pos = ImGui::GetCursorScreenPos();
+                        float btn_w = ImGui::GetContentRegionAvail().x;
 
-                    std::string display = display_name(s->name);
-                    std::string hotkey_str;
-                    if (s->hotkey >= 0) {
-                        const char* kn = glfwGetKeyName(s->hotkey, 0);
-                        if (kn) { hotkey_str = " ["; hotkey_str += kn; hotkey_str += "]"; }
-                    }
-
-                    float btn_w = ImGui::GetContentRegionAvail().x;
-                    float text_max = btn_w - ImGui::GetStyle().FramePadding.x * 2.0f;
-                    float ellipsis_w = ImGui::CalcTextSize("...").x;
-                    float suffix_w = ImGui::CalcTextSize(hotkey_str.c_str()).x;
-                    float name_max = text_max - suffix_w;
-
-                    if (name_max > 0 && ImGui::CalcTextSize(display.c_str()).x + ellipsis_w > name_max) {
-                        while (!display.empty() && ImGui::CalcTextSize(display.c_str()).x + ellipsis_w > name_max)
-                            display.pop_back();
-                        display += "...";
-                    }
-                    std::string label = display + hotkey_str;
-
-                    bool is_playing = !s->active_voices.empty();
-                    bool is_sel = (current_selected_sound == s.get());
-                    if (is_playing)
-                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.4f, 0.3f, 1));
-                    else if (is_sel)
-                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.8f, 1));
-
-                    if (ImGui::Button(label.c_str(), ImVec2(-1, 34))) {
-                        current_selected_sound = s.get();
-                        if (s->play_mode == PLAY_RESTART) play_sound(*s);
-                        else if (s->play_mode == PLAY_PAUSE) {
-                            if (!s->active_voices.empty()) toggle_pause_sound(*s);
-                            else play_sound(*s);
+                        if (ImGui::InvisibleButton("##back", ImVec2(btn_w, btn_h))) {
+                            std::string parent = std::filesystem::path("sounds/" + current_folder).parent_path().string();
+                            std::string sounds_root = "sounds";
+                            if (parent == sounds_root || parent == ".")
+                                current_folder = "";
+                            else {
+                                // Strip "sounds/" prefix
+                                current_folder = parent.substr(sounds_root.length() + 1);
+                            }
+                            needs_sound_reload = true;
+                            current_selected_sound = nullptr;
                         }
-                        else if (s->play_mode == PLAY_STOP) {
-                            if (is_sound_playing(*s)) stop_sound(*s);
-                            else play_sound(*s);
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::BeginTooltip();
+                            ImGui::TextUnformatted("Go back");
+                            ImGui::EndTooltip();
                         }
+                        // Drop target — move sound to parent folder
+                        if (ImGui::BeginDragDropTarget()) {
+                            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SOUND_DRAG")) {
+                                int sound_idx = *(const int*)payload->Data;
+                                if (sound_idx >= 0 && sound_idx < (int)sounds.size()) {
+                                    Sound* drag_sound = sounds[sound_idx].get();
+                                    std::string parent = std::filesystem::path("sounds/" + current_folder).parent_path().string();
+                                    std::string sounds_root = "sounds";
+                                    std::string dest_folder = "";
+                                    if (parent != sounds_root && parent != ".") {
+                                        dest_folder = parent.substr(sounds_root.length() + 1);
+                                    }
+                                    cut_sound_to_folder(drag_sound, dest_folder);
+                                    needs_sound_reload = true;
+                                }
+                            }
+                            ImGui::EndDragDropTarget();
+                        }
+                        ImDrawList* dl = ImGui::GetWindowDrawList();
+                        draw_folder_icon(dl, ImVec2(btn_pos.x + 4, btn_pos.y + (btn_h - icon_size) * 0.5f), icon_size);
+                        dl->AddText(ImVec2(btn_pos.x + icon_size + 8, btn_pos.y + (btn_h - ImGui::GetTextLineHeight()) * 0.5f),
+                            ImGui::GetColorU32(ImGuiCol_Text), "..");
+                        ImGui::PopID();
                     }
 
-                    if (is_playing || is_sel)
+                    // Folder entries
+                    for (auto& folder_name : subdirs) {
+                        if (search_filter[0]) {
+                            std::string lower = folder_name;
+                            std::string lf = search_filter;
+                            for (auto& c : lower) c = (char)std::tolower(c);
+                            for (auto& c : lf) c = (char)std::tolower(c);
+                            if (lower.find(lf) == std::string::npos) continue;
+                        }
+
+                        ImGui::TableNextColumn();
+                        ImGui::PushID(folder_name.c_str());
+
+                        float btn_h = 34.0f;
+                        float icon_size = 16.0f;
+                        ImVec2 btn_pos = ImGui::GetCursorScreenPos();
+                        float btn_w = ImGui::GetContentRegionAvail().x;
+
+                        bool is_folder_sel = false;
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.3f, 0.1f, 1));
+                        if (ImGui::Button(folder_name.c_str(), ImVec2(-1, btn_h))) {
+                            if (!current_folder.empty()) current_folder += "/";
+                            current_folder += folder_name;
+                            needs_sound_reload = true;
+                            current_selected_sound = nullptr;
+                            search_filter[0] = '\0';
+                        }
                         ImGui::PopStyleColor();
 
-                    // --- Right-click context menu ---
-                    if (ImGui::BeginPopupContextItem()) {
-                        current_selected_sound = s.get();
-                        ImGui::Text("Sound: %s", display_name(s->name).c_str());
-                        ImGui::Separator();
-                        if (ImGui::MenuItem("Properties")) {
-                            properties_sound = s.get();
-                            open_properties_popup = true;
-                        }
-                        if (ImGui::MenuItem("Rename")) {
-                            renaming_sound = s.get();
-                            strncpy(rename_buf, s->name.c_str(), sizeof(rename_buf) - 1);
-                            open_rename_popup = true;
-                        }
-                        if (ImGui::MenuItem("Play")) { play_sound(*s); }
-                        if (ImGui::MenuItem("Stop")) { stop_sound(*s); }
-                        if (ImGui::MenuItem("Set Artwork...")) {
-                            char filename[MAX_PATH] = {};
-                            OPENFILENAMEA ofn = {};
-                            ofn.lStructSize = sizeof(ofn);
-                            ofn.hwndOwner = NULL;
-                            ofn.lpstrFilter = "Image Files\0*.jpg;*.jpeg;*.png;*.bmp;*.tga;*.ppm\0All Files\0*.*\0";
-                            ofn.lpstrFile = filename;
-                            ofn.nMaxFile = MAX_PATH;
-                            ofn.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
-                            if (GetOpenFileNameA(&ofn)) {
-                                std::string ext = std::filesystem::path(filename).extension().string();
-                                std::string dest = "sounds/" + s->name + ext;
-                                std::filesystem::copy_file(filename, dest, std::filesystem::copy_options::overwrite_existing);
-                                if (s->thumb_tex_id != 0) {
-                                    glDeleteTextures(1, &s->thumb_tex_id);
-                                    s->thumb_tex_id = 0;
-                                }
-                                s->thumb_tex_id = load_texture_from_file(dest.c_str());
-                            }
-                        }
-                        if (s->thumb_tex_id != 0 && ImGui::MenuItem("Remove Artwork")) {
-                            glDeleteTextures(1, &s->thumb_tex_id);
-                            s->thumb_tex_id = 0;
-        for (auto ext : { ".ppm", ".jpg", ".jpeg", ".png", ".bmp", ".tga" }) {
-                                std::error_code ec;
-                                std::filesystem::remove("sounds/" + s->name + ext, ec);
-                            }
-                        }
-                        ImGui::Separator();
-                        bool m = s->muted;
-                        if (ImGui::MenuItem("Mute", nullptr, &m)) {
-                            s->muted = m; save_config_to_json();
-                        }
-                        bool fx = s->fx_enabled;
-                        if (ImGui::MenuItem("FX Enabled", nullptr, &fx)) {
-                            s->fx_enabled = fx;
-                            save_config_to_json();
-                        }
-                        if (ImGui::MenuItem("Clear Hotkey")) {
-                            s->hotkey = -1; save_config_to_json();
-                        }
-                        ImGui::Separator();
-                        if (ImGui::MenuItem("Delete Sound", "Del")) {
-                            delete_confirm_sound = s.get();
-                            snprintf(delete_confirm_name, sizeof(delete_confirm_name), "%s", display_name(s->name).c_str());
-                            open_delete_popup = true;
-                        }
-        ImGui::EndPopup();
-    }
+                        // Draw folder icon overlay
+                        ImDrawList* dl = ImGui::GetWindowDrawList();
+                        draw_folder_icon(dl, ImVec2(btn_pos.x + 4, btn_pos.y + (btn_h - icon_size) * 0.5f), icon_size);
 
-                    ImGui::PopID();
+                        // Drop target
+                        if (ImGui::BeginDragDropTarget()) {
+                            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SOUND_DRAG")) {
+                                int sound_idx = *(const int*)payload->Data;
+                                if (sound_idx >= 0 && sound_idx < (int)sounds.size()) {
+                                    Sound* drag_sound = sounds[sound_idx].get();
+                                    std::string dest_folder = current_folder;
+                                    if (!dest_folder.empty()) dest_folder += "/";
+                                    dest_folder += folder_name;
+                                    cut_sound_to_folder(drag_sound, dest_folder);
+                                    needs_sound_reload = true;
+                                }
+                            }
+                            ImGui::EndDragDropTarget();
+                        }
+
+                        // Right-click on folder
+                        if (ImGui::BeginPopupContextItem()) {
+                            ImGui::Text("Folder: %s", folder_name.c_str());
+                            ImGui::Separator();
+                            if (ImGui::MenuItem("Open")) {
+                                if (!current_folder.empty()) current_folder += "/";
+                                current_folder += folder_name;
+                                needs_sound_reload = true;
+                                current_selected_sound = nullptr;
+                                search_filter[0] = '\0';
+                            }
+                            if (ImGui::MenuItem("Rename")) {
+                                strncpy(rename_folder_buf, folder_name.c_str(), sizeof(rename_folder_buf) - 1);
+                                std::string fpath = "sounds/" + current_folder;
+                                if (!fpath.empty() && fpath.back() != '/') fpath += "/";
+                                fpath += folder_name;
+                                renaming_folder_path = fpath;
+                                open_rename_folder_popup = true;
+                            }
+                            if (ImGui::MenuItem("Delete")) {
+                                std::string fpath = "sounds/" + current_folder;
+                                if (!fpath.empty() && fpath.back() != '/') fpath += "/";
+                                fpath += folder_name;
+                                delete_confirm_folder_path = fpath;
+                                open_delete_folder_popup = true;
+                            }
+                            ImGui::Separator();
+                            if (ImGui::MenuItem("Copy")) {
+                                clipboard_type = CLIP_FOLDER;
+                                clipboard_source_name = folder_name;
+                                clipboard_source_path = "sounds/" + current_folder;
+                                if (!clipboard_source_path.empty() && clipboard_source_path.back() != '/')
+                                    clipboard_source_path += "/";
+                                clipboard_source_path += folder_name;
+                                clipboard_is_cut = false;
+                            }
+                            if (ImGui::MenuItem("Cut")) {
+                                clipboard_type = CLIP_FOLDER;
+                                clipboard_source_name = folder_name;
+                                clipboard_source_path = "sounds/" + current_folder;
+                                if (!clipboard_source_path.empty() && clipboard_source_path.back() != '/')
+                                    clipboard_source_path += "/";
+                                clipboard_source_path += folder_name;
+                                clipboard_is_cut = true;
+                            }
+                            ImGui::EndPopup();
+                        }
+
+                        ImGui::PopID();
+                    }
+
+                    // Sound entries
+                    for (auto& s : sounds) {
+                        bool skip = false;
+                        if (search_filter[0]) {
+                            std::string lower_name = s->name;
+                            std::string lower_filter = search_filter;
+                            for (auto& c : lower_name) c = (char)std::tolower(c);
+                            for (auto& c : lower_filter) c = (char)std::tolower(c);
+                            if (lower_name.find(lower_filter) == std::string::npos)
+                                skip = true;
+                        }
+
+                        ImGui::TableNextColumn();
+                        if (skip) continue;
+
+                        // --- Sound button ---
+                        ImGui::PushID(s.get());
+
+                        std::string display = display_name(s->name);
+                        std::string hotkey_str;
+                        if (s->hotkey >= 0) {
+                            const char* kn = glfwGetKeyName(s->hotkey, 0);
+                            if (kn) { hotkey_str = " ["; hotkey_str += kn; hotkey_str += "]"; }
+                        }
+
+                        float btn_w = ImGui::GetContentRegionAvail().x;
+                        float text_max = btn_w - ImGui::GetStyle().FramePadding.x * 2.0f;
+                        float ellipsis_w = ImGui::CalcTextSize("...").x;
+                        float suffix_w = ImGui::CalcTextSize(hotkey_str.c_str()).x;
+                        float name_max = text_max - suffix_w;
+
+                        if (name_max > 0 && ImGui::CalcTextSize(display.c_str()).x + ellipsis_w > name_max) {
+                            while (!display.empty() && ImGui::CalcTextSize(display.c_str()).x + ellipsis_w > name_max)
+                                display.pop_back();
+                            display += "...";
+                        }
+                        std::string label = display + hotkey_str;
+
+                        bool is_playing = !s->active_voices.empty();
+                        bool is_sel = (current_selected_sound == s.get());
+                        if (is_playing)
+                            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.4f, 0.3f, 1));
+                        else if (is_sel)
+                            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.8f, 1));
+
+                        if (ImGui::Button(label.c_str(), ImVec2(-1, 34))) {
+                            if (!ImGui::GetIO().KeyCtrl) {
+                                current_selected_sound = s.get();
+                                if (s->play_mode == PLAY_RESTART) play_sound(*s);
+                                else if (s->play_mode == PLAY_PAUSE) {
+                                    if (!s->active_voices.empty()) toggle_pause_sound(*s);
+                                    else play_sound(*s);
+                                }
+                                else if (s->play_mode == PLAY_STOP) {
+                                    if (is_sound_playing(*s)) stop_sound(*s);
+                                    else play_sound(*s);
+                                }
+                            } else {
+                                current_selected_sound = s.get();
+                            }
+                        }
+
+                        if (is_playing || is_sel)
+                            ImGui::PopStyleColor();
+
+                        // Drag source
+                        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                            int sound_idx = -1;
+                            for (int i = 0; i < (int)sounds.size(); i++) {
+                                if (sounds[i].get() == s.get()) { sound_idx = i; break; }
+                            }
+                            ImGui::SetDragDropPayload("SOUND_DRAG", &sound_idx, sizeof(int));
+                            ImGui::Text("Move %s", display_name(s->name).c_str());
+                            ImGui::EndDragDropSource();
+                        }
+
+                        // --- Right-click context menu ---
+                        if (ImGui::BeginPopupContextItem()) {
+                            current_selected_sound = s.get();
+                            ImGui::Text("Sound: %s", display_name(s->name).c_str());
+                            ImGui::Separator();
+                            if (ImGui::MenuItem("Properties")) {
+                                properties_sound = s.get();
+                                open_properties_popup = true;
+                            }
+                            if (ImGui::MenuItem("Rename")) {
+                                renaming_sound = s.get();
+                                strncpy(rename_buf, s->name.c_str(), sizeof(rename_buf) - 1);
+                                open_rename_popup = true;
+                            }
+                            if (ImGui::MenuItem("Play")) { play_sound(*s); }
+                            if (ImGui::MenuItem("Stop")) { stop_sound(*s); }
+                            if (ImGui::MenuItem("Set Artwork...")) {
+                                char filename[MAX_PATH] = {};
+                                OPENFILENAMEA ofn = {};
+                                ofn.lStructSize = sizeof(ofn);
+                                ofn.hwndOwner = NULL;
+                                ofn.lpstrFilter = "Image Files\0*.jpg;*.jpeg;*.png;*.bmp;*.tga;*.ppm\0All Files\0*.*\0";
+                                ofn.lpstrFile = filename;
+                                ofn.nMaxFile = MAX_PATH;
+                                ofn.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+                                if (GetOpenFileNameA(&ofn)) {
+                                    std::string ext = std::filesystem::path(filename).extension().string();
+                                    std::string dest = "sounds/";
+                                    if (!s->folder.empty()) dest += s->folder + "/";
+                                    dest += s->name + ext;
+                                    std::filesystem::copy_file(filename, dest, std::filesystem::copy_options::overwrite_existing);
+                                    if (s->thumb_tex_id != 0) {
+                                        glDeleteTextures(1, &s->thumb_tex_id);
+                                        s->thumb_tex_id = 0;
+                                    }
+                                    s->thumb_tex_id = load_texture_from_file(dest.c_str());
+                                }
+                            }
+                            if (s->thumb_tex_id != 0 && ImGui::MenuItem("Remove Artwork")) {
+                                glDeleteTextures(1, &s->thumb_tex_id);
+                                s->thumb_tex_id = 0;
+                                std::string art_base = "sounds/";
+                                if (!s->folder.empty()) art_base += s->folder + "/";
+                                art_base += s->name;
+                                for (auto ext : { ".ppm", ".jpg", ".jpeg", ".png", ".bmp", ".tga" }) {
+                                    std::error_code ec;
+                                    std::filesystem::remove(art_base + ext, ec);
+                                }
+                            }
+                            ImGui::Separator();
+                            bool m = s->muted;
+                            if (ImGui::MenuItem("Mute", nullptr, &m)) {
+                                s->muted = m; save_config_to_json();
+                            }
+                            bool fx = s->fx_enabled;
+                            if (ImGui::MenuItem("FX Enabled", nullptr, &fx)) {
+                                s->fx_enabled = fx;
+                                save_config_to_json();
+                            }
+                            if (ImGui::MenuItem("Clear Hotkey")) {
+                                s->hotkey = -1; save_config_to_json();
+                            }
+                            ImGui::Separator();
+                            if (ImGui::MenuItem("Copy", "Ctrl+C")) {
+                                clipboard_type = CLIP_SOUND;
+                                clipboard_source_path = s->path;
+                                clipboard_source_name = s->name;
+                                clipboard_is_cut = false;
+                            }
+                            if (ImGui::MenuItem("Cut", "Ctrl+X")) {
+                                clipboard_type = CLIP_SOUND;
+                                clipboard_source_path = s->path;
+                                clipboard_source_name = s->name;
+                                clipboard_is_cut = true;
+                            }
+                            ImGui::Separator();
+                            if (ImGui::MenuItem("Delete Sound", "Del")) {
+                                delete_confirm_sound = s.get();
+                                snprintf(delete_confirm_name, sizeof(delete_confirm_name), "%s", display_name(s->name).c_str());
+                                open_delete_popup = true;
+                            }
+                            ImGui::EndPopup();
+                        }
+
+                        ImGui::PopID();
+                    }
+                    ImGui::EndTable();
                 }
-                ImGui::EndTable();
+            }
+
+            // Right-click on grid background (empty area)
+            if (ImGui::BeginPopupContextWindow("GridContext", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverExistingPopup)) {
+                if (ImGui::MenuItem("New Folder...")) {
+                    new_folder_buf[0] = '\0';
+                    open_new_folder_popup = true;
+                }
+                if (clipboard_type != CLIP_NONE && ImGui::MenuItem("Paste", "Ctrl+V")) {
+                    paste_clipboard();
+                    needs_sound_reload = true;
+                }
+                ImGui::EndPopup();
             }
 
             ImGui::EndChild();
@@ -1619,6 +1910,83 @@ bool draw_ui() {
         ImGui::EndPopup();
     } else if (!open_properties_popup) {
         properties_sound = nullptr;
+    }
+
+    // New Folder popup
+    if (open_new_folder_popup) {
+        ImGui::OpenPopup("New Folder");
+        open_new_folder_popup = false;
+    }
+    if (ImGui::BeginPopupModal("New Folder", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Enter folder name:");
+        ImGui::Spacing();
+        ImGui::SetNextItemWidth(300);
+        bool confirm = ImGui::InputText("##newfolder", new_folder_buf, sizeof(new_folder_buf),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::Spacing();
+        bool ok = ImGui::Button("Create", ImVec2(80, 0));
+        ImGui::SameLine();
+        bool cancel = ImGui::Button("Cancel", ImVec2(80, 0));
+        if (confirm || ok) {
+            if (new_folder_buf[0] != '\0')
+                create_folder(new_folder_buf);
+            ImGui::CloseCurrentPopup();
+        }
+        if (cancel) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Rename Folder popup
+    if (open_rename_folder_popup) {
+        ImGui::OpenPopup("Rename Folder");
+        open_rename_folder_popup = false;
+    }
+    if (ImGui::BeginPopupModal("Rename Folder", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Enter new folder name:");
+        ImGui::Spacing();
+        ImGui::SetNextItemWidth(300);
+        bool confirm = ImGui::InputText("##renamefolder", rename_folder_buf, sizeof(rename_folder_buf),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::Spacing();
+        bool ok = ImGui::Button("OK", ImVec2(80, 0));
+        ImGui::SameLine();
+        bool cancel = ImGui::Button("Cancel", ImVec2(80, 0));
+        if (confirm || ok) {
+            if (rename_folder_buf[0] != '\0')
+                rename_folder(renaming_folder_path, rename_folder_buf);
+            ImGui::CloseCurrentPopup();
+        }
+        if (cancel) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Delete Folder confirmation popup
+    if (open_delete_folder_popup) {
+        ImGui::OpenPopup("Confirm Delete Folder");
+        open_delete_folder_popup = false;
+    }
+    if (ImGui::BeginPopupModal("Confirm Delete Folder", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Delete folder and all its contents?");
+        ImGui::TextDisabled("%s", delete_confirm_folder_path.c_str());
+        ImGui::Spacing();
+        bool yes = ImGui::Button("Delete", ImVec2(80, 0));
+        ImGui::SameLine();
+        bool no = ImGui::Button("Cancel", ImVec2(80, 0));
+        if (yes) {
+            delete_folder(delete_confirm_folder_path);
+            needs_sound_reload = true;
+            delete_confirm_folder_path.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        if (no) {
+            delete_confirm_folder_path.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     if (g_update_available) {

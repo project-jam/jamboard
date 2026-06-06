@@ -433,6 +433,9 @@ void create_folder(const std::string& name)
 void delete_folder(const std::string& folder_path)
 {
     std::error_code ec;
+    // Clean up orphaned profile keys before deleting the folder
+    std::string folder = folder_path.length() > 7 ? folder_path.substr(7) : "";
+    remove_profiles_folder(folder);
     std::filesystem::remove_all(utf8_to_path(folder_path), ec);
 }
 
@@ -440,6 +443,12 @@ void rename_folder(const std::string& old_path, const std::string& new_name)
 {
     std::error_code ec;
     std::string parent = std::filesystem::path(old_path).parent_path().string();
+    // Rekey all profiles under the old folder name before renaming
+    std::string old_folder = old_path.length() > 7 ? old_path.substr(7) : "";
+    std::string new_folder = parent.length() > 7 ? parent.substr(7) : "";
+    if (!new_folder.empty()) new_folder += "/";
+    new_folder += new_name;
+    rekey_profiles_folder(old_folder, new_folder);
     std::filesystem::rename(utf8_to_path(old_path), utf8_to_path(parent + "/" + new_name), ec);
 }
 
@@ -494,6 +503,10 @@ void copy_sound_to_folder(Sound* sound, const std::string& dest_folder)
     dest_stem += sound->name;
 
     copy_sound_files(src_stem, dest_stem);
+
+    std::string old_key = sound->folder.empty() ? sound->name : sound->folder + "/" + sound->name;
+    std::string new_key = dest_folder.empty() ? sound->name : dest_folder + "/" + sound->name;
+    copy_profile_key(old_key, new_key);
 }
 
 void cut_sound_to_folder(Sound* sound, const std::string& dest_folder)
@@ -558,6 +571,14 @@ void paste_clipboard()
                     if (std::filesystem::exists(utf8_to_path(s_file)))
                         std::filesystem::rename(utf8_to_path(s_file), utf8_to_path(d_file), ec);
                 }
+
+                // Rekey profile: derive old folder from source path
+                std::string old_stem = clipboard_source_path.substr(0, clipboard_source_path.length() - ext.length());
+                std::string old_rel = old_stem.length() > 7 ? old_stem.substr(7) : "";
+                std::string old_folder;
+                auto slash_pos = old_rel.rfind('/');
+                if (slash_pos != std::string::npos) old_folder = old_rel.substr(0, slash_pos);
+                rekey_profiles_folder(old_folder, current_folder);
             }
             clipboard_type = CLIP_NONE;
         } else {
@@ -582,6 +603,14 @@ void paste_clipboard()
                         std::filesystem::copy_file(utf8_to_path(s_file), utf8_to_path(d_file),
                             std::filesystem::copy_options::overwrite_existing, ec);
                 }
+
+                // Copy profile: derive old folder from source path
+                std::string old_stem = clipboard_source_path.substr(0, clipboard_source_path.length() - ext.length());
+                std::string old_rel = old_stem.length() > 7 ? old_stem.substr(7) : "";
+                std::string old_folder;
+                auto slash_pos = old_rel.rfind('/');
+                if (slash_pos != std::string::npos) old_folder = old_rel.substr(0, slash_pos);
+                copy_profiles_folder(old_folder, current_folder);
             }
         }
     }
@@ -592,6 +621,13 @@ void paste_clipboard()
             dest += clipboard_source_name;
             std::error_code ec;
             std::filesystem::rename(utf8_to_path(clipboard_source_path), utf8_to_path(dest), ec);
+            // Rekey all profiles under the old folder to the new location
+            std::string old_folder = clipboard_source_path.length() > 7
+                ? clipboard_source_path.substr(7) : "";
+            std::string new_folder = current_folder.empty()
+                ? clipboard_source_name
+                : current_folder + "/" + clipboard_source_name;
+            rekey_profiles_folder(old_folder, new_folder);
             clipboard_type = CLIP_NONE;
         } else {
             std::string dest = "sounds/" + current_folder;
@@ -600,6 +636,13 @@ void paste_clipboard()
             std::error_code ec;
             copy_directory_recursive(utf8_to_path(clipboard_source_path),
                 utf8_to_path(dest));
+            // Copy all profiles under the old folder to the new location
+            std::string src_folder = clipboard_source_path.length() > 7
+                ? clipboard_source_path.substr(7) : "";
+            std::string dest_folder = current_folder.empty()
+                ? clipboard_source_name
+                : current_folder + "/" + clipboard_source_name;
+            copy_profiles_folder(src_folder, dest_folder);
         }
     }
 

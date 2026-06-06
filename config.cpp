@@ -289,3 +289,84 @@ void load_config_from_json() {
         }
     }
 }
+
+static json load_config_file() {
+    std::ifstream file("config.json");
+    json j;
+    if (file.is_open()) file >> j;
+    return j;
+}
+
+static void save_config_file(const json& j) {
+    std::ofstream file("config.json");
+    if (file.is_open()) file << j.dump(4);
+}
+
+void rename_profile_key(const std::string& old_key, const std::string& new_key) {
+    if (old_key == new_key) return;
+    json j = load_config_file();
+    if (!j.contains("profiles") || !j["profiles"].contains(old_key)) return;
+    j["profiles"][new_key] = j["profiles"][old_key];
+    j["profiles"].erase(old_key);
+    save_config_file(j);
+}
+
+void copy_profile_key(const std::string& src_key, const std::string& dest_key) {
+    json j = load_config_file();
+    if (!j.contains("profiles") || !j["profiles"].contains(src_key)) return;
+    j["profiles"][dest_key] = j["profiles"][src_key];
+    save_config_file(j);
+}
+
+void rekey_profiles_folder(const std::string& old_folder, const std::string& new_folder) {
+    if (old_folder == new_folder) return;
+    json j = load_config_file();
+    if (!j.contains("profiles")) return;
+    std::string old_prefix = old_folder.empty() ? "" : old_folder + "/";
+    std::string new_prefix = new_folder.empty() ? "" : new_folder + "/";
+    json new_profiles;
+    for (auto& [key, val] : j["profiles"].items()) {
+        if (!old_prefix.empty() && key.find(old_prefix) == 0) {
+            std::string rest = key.substr(old_prefix.length());
+            new_profiles[new_prefix + rest] = val;
+        } else if (old_prefix.empty() && key.find('/') == std::string::npos) {
+            new_profiles[new_prefix + key] = val;
+        } else {
+            new_profiles[key] = val;
+        }
+    }
+    j["profiles"] = new_profiles;
+    save_config_file(j);
+}
+
+void copy_profiles_folder(const std::string& src_folder, const std::string& dest_folder) {
+    json j = load_config_file();
+    if (!j.contains("profiles")) return;
+    std::string src_prefix = src_folder.empty() ? "" : src_folder + "/";
+    std::string dest_prefix = dest_folder.empty() ? "" : dest_folder + "/";
+    for (auto& [key, val] : j["profiles"].items()) {
+        if (!src_prefix.empty() && key.find(src_prefix) == 0) {
+            std::string rest = key.substr(src_prefix.length());
+            j["profiles"][dest_prefix + rest] = val;
+        } else if (src_prefix.empty() && key.find('/') == std::string::npos) {
+            j["profiles"][dest_prefix + key] = val;
+        }
+    }
+    save_config_file(j);
+}
+
+void remove_profiles_folder(const std::string& folder) {
+    json j = load_config_file();
+    if (!j.contains("profiles")) return;
+    std::string prefix = folder.empty() ? "" : folder + "/";
+    std::vector<std::string> to_remove;
+    for (auto& [key, val] : j["profiles"].items()) {
+        if (!prefix.empty() && key.find(prefix) == 0) {
+            to_remove.push_back(key);
+        } else if (prefix.empty() && key.find('/') == std::string::npos) {
+            to_remove.push_back(key);
+        }
+    }
+    for (auto& key : to_remove) j["profiles"].erase(key);
+    save_config_file(j);
+}

@@ -9,6 +9,7 @@ extern bool g_update_available;
 extern std::string g_latest_version;
 extern std::string g_update_url;
 extern std::string g_download_url;
+extern std::string g_release_notes;
 extern bool g_download_progress;
 extern std::string g_update_check_status;
 

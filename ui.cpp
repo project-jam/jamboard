@@ -271,13 +271,12 @@ bool draw_ui() {
         g_capturing_hotkey_sound = nullptr;
         current_selected_sound = nullptr;
         destroy_all_sound_fx_chains();
-        shutdown_audio_routing();
+        stop_all_sounds();
         sounds.clear();
         load_sounds("sounds");
         load_config_from_json();
         init_ui_textures();
         needs_sound_reload = false;
-        setup_audio_routing();
         init_all_sound_fx_chains();
     }
 
@@ -310,22 +309,24 @@ bool draw_ui() {
                 voice.cached_pan = pan;
             }
 
-            if (s->trim_enabled && voice.spk) {
+            if (voice.spk) {
                 if (s->cached_total_frames == 0) {
                     ma_uint64 tf = 0;
                     ma_sound_get_length_in_pcm_frames(voice.spk, &tf);
                     s->cached_total_frames = tf;
                 }
                 if (s->cached_total_frames > 0) {
+                    float end = s->trim_enabled ? s->trim_end : 1.0f;
+                    float start = s->trim_enabled ? s->trim_start : 0.0f;
                     ma_uint64 cur_frame = 0;
                     ma_sound_get_cursor_in_pcm_frames(voice.spk, &cur_frame);
                     double progress = (double)cur_frame / (double)s->cached_total_frames;
-                    if (progress >= (double)s->trim_end) {
+                    if (progress >= (double)end) {
                         if (s->loop_track) {
-                            ma_uint64 start = (ma_uint64)(s->trim_start * s->cached_total_frames);
-                            ma_sound_seek_to_pcm_frame(voice.spk, start);
+                            ma_uint64 seek_to = (ma_uint64)(start * s->cached_total_frames);
+                            ma_sound_seek_to_pcm_frame(voice.spk, seek_to);
                             if (voice.vrt)
-                                ma_sound_seek_to_pcm_frame(voice.vrt, start);
+                                ma_sound_seek_to_pcm_frame(voice.vrt, seek_to);
                         } else {
                             ma_sound_stop(voice.spk);
                             if (voice.vrt) ma_sound_stop(voice.vrt);
@@ -400,7 +401,15 @@ bool draw_ui() {
                 bool ov = s.overlap_enabled;
                 if (ImGui::Checkbox("Overlap (Multiplay)", &ov)) { s.overlap_enabled = ov; save_config_to_json(); }
                 bool lp = s.loop_track;
-                if (ImGui::Checkbox("Loop Track", &lp)) { s.loop_track = lp; save_config_to_json(); }
+                if (ImGui::Checkbox("Loop Track", &lp)) {
+                    s.loop_track = lp;
+                    for (auto& v : s.active_voices) {
+                        bool use_builtin = lp && !s.trim_enabled;
+                        if (v.spk) ma_sound_set_looping(v.spk, use_builtin ? MA_TRUE : MA_FALSE);
+                        if (v.vrt) ma_sound_set_looping(v.vrt, use_builtin ? MA_TRUE : MA_FALSE);
+                    }
+                    save_config_to_json();
+                }
                 bool mu = s.muted;
                 if (ImGui::Checkbox("Muted", &mu)) { s.muted = mu; save_config_to_json(); }
 
@@ -504,7 +513,11 @@ bool draw_ui() {
             }
 
             bool has_back = !current_folder.empty();
-            bool has_items = has_back || !subdirs.empty() || !sounds.empty();
+            bool has_sounds_in_folder = false;
+            for (auto& s : sounds) {
+                if (s->folder == current_folder) { has_sounds_in_folder = true; break; }
+            }
+            bool has_items = has_back || !subdirs.empty() || has_sounds_in_folder;
             bool filtered_empty = has_items && search_filter[0] != '\0';
 
             // Show empty state if no items at all
@@ -522,6 +535,7 @@ bool draw_ui() {
             else if (filtered_empty) {
                 bool any_match = false;
                 for (auto& s : sounds) {
+                    if (s->folder != current_folder) continue;
                     std::string lower_name = s->name;
                     std::string lower_filter = search_filter;
                     for (auto& c : lower_name) c = (char)std::tolower(c);
@@ -566,7 +580,6 @@ bool draw_ui() {
                                 // Strip "sounds/" prefix
                                 current_folder = parent.substr(sounds_root.length() + 1);
                             }
-                            needs_sound_reload = true;
                             current_selected_sound = nullptr;
                         }
                         if (ImGui::IsItemHovered()) {
@@ -622,7 +635,6 @@ bool draw_ui() {
                         if (ImGui::Button(folder_name.c_str(), ImVec2(-1, btn_h))) {
                             if (!current_folder.empty()) current_folder += "/";
                             current_folder += folder_name;
-                            needs_sound_reload = true;
                             current_selected_sound = nullptr;
                             search_filter[0] = '\0';
                         }
@@ -701,6 +713,8 @@ bool draw_ui() {
 
                     // Sound entries
                     for (auto& s : sounds) {
+                        if (s->folder != current_folder) continue;
+
                         bool skip = false;
                         if (search_filter[0]) {
                             std::string lower_name = s->name;
@@ -894,11 +908,14 @@ bool draw_ui() {
 
                     float v_cur = 0.0f, v_tot = 0.0f;
                     if (voice.spk) {
-                        if (voice.paused)
+                        if (voice.paused) {
                             v_cur = voice.paused_cursor;
-                        else {
-                            auto el = std::chrono::steady_clock::now() - voice.play_start;
-                            v_cur = std::chrono::duration<float>(el).count() * (s->fx_enabled ? s->fx.playback_speed : 1.0f);
+                        } else {
+                            ma_uint64 cursor = 0;
+                            if (ma_sound_get_cursor_in_pcm_frames(voice.spk, &cursor) == MA_SUCCESS) {
+                                float sr = (float)ma_engine_get_sample_rate(&engine_speakers);
+                                v_cur = (float)cursor / sr;
+                            }
                         }
                         if (s->cached_total_frames == 0) {
                             ma_uint64 pf = 0;
@@ -983,12 +1000,14 @@ bool draw_ui() {
 
             if (tv && current_selected_sound) {
                 auto& voice = current_selected_sound->active_voices.back();
-                if (voice.paused)
+                if (voice.paused) {
                     cur_sec = voice.paused_cursor;
-                else {
-                    auto elapsed = std::chrono::steady_clock::now() - voice.play_start;
-                    cur_sec = std::chrono::duration<float>(elapsed).count()
-                        * (current_selected_sound->fx_enabled ? current_selected_sound->fx.playback_speed : 1.0f);
+                } else {
+                    ma_uint64 cursor = 0;
+                    if (ma_sound_get_cursor_in_pcm_frames(tv, &cursor) == MA_SUCCESS) {
+                        float sr2 = (float)ma_engine_get_sample_rate(&engine_speakers);
+                        cur_sec = (float)cursor / sr2;
+                    }
                 }
                 if (current_selected_sound->cached_total_frames == 0) {
                     ma_uint64 tf = 0;
@@ -1999,6 +2018,19 @@ bool draw_ui() {
         ImGui::Text("Current: %s", JAMBOARD_VERSION);
         ImGui::Text("Latest:  %s", g_latest_version.c_str());
         ImGui::Spacing();
+
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Release Notes:");
+        ImGui::Separator();
+        if (g_release_notes.empty()) {
+            ImGui::TextDisabled("The owner forgot to put something, you'll know :)");
+        } else {
+            ImGui::BeginChild("ReleaseNotes", ImVec2(400, 150), true);
+            ImGui::TextWrapped("%s", g_release_notes.c_str());
+            ImGui::EndChild();
+        }
+        ImGui::Separator();
+        ImGui::Spacing();
+
         if (g_download_progress) {
             ImGui::TextDisabled("Downloading...");
         } else {

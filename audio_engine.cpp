@@ -3,6 +3,7 @@
 #include "config.h"
 #include <iostream>
 #include <cstring>
+#include <cmath>
 #include <algorithm>
 #include <filesystem>
 #include <windows.h>
@@ -186,6 +187,12 @@ void play_sound(Sound& sound)
     if (sound.active_voices.size() >= MAX_VOICES)
         return;
 
+    float vol = sound.muted ? 0.0f : sound.volume_amp;
+    float pitch = sound.fx_enabled
+        ? sound.fx.playback_speed * std::pow(2.0f, sound.fx.pitch_semitones / 12.0f)
+        : 1.0f;
+    float pan = sound.fx.pan;
+
     SoundVoice v;
 
     if (speakers_engine_initialized) {
@@ -197,6 +204,11 @@ void play_sound(Sound& sound)
             NULL,
             v.spk);
 
+        ma_sound_set_volume(v.spk, vol);
+        ma_sound_set_pitch(v.spk, pitch);
+        ma_sound_set_pan(v.spk, pan);
+        if (sound.loop_track && !sound.trim_enabled)
+            ma_sound_set_looping(v.spk, MA_TRUE);
         ma_sound_start(v.spk);
 
         if (sound.trim_enabled) {
@@ -218,6 +230,11 @@ void play_sound(Sound& sound)
             NULL,
             v.vrt);
 
+        ma_sound_set_volume(v.vrt, vol);
+        ma_sound_set_pitch(v.vrt, pitch);
+        ma_sound_set_pan(v.vrt, pan);
+        if (sound.loop_track && !sound.trim_enabled)
+            ma_sound_set_looping(v.vrt, MA_TRUE);
         ma_sound_start(v.vrt);
 
         if (sound.trim_enabled) {
@@ -232,6 +249,9 @@ void play_sound(Sound& sound)
 
     v.play_start = std::chrono::steady_clock::now();
     v.paused = false;
+    v.cached_vol = vol;
+    v.cached_pitch = pitch;
+    v.cached_pan = pan;
     sound.active_voices.push_back(v);
 }
 
@@ -310,14 +330,10 @@ void load_sounds(const std::string& folder)
 {
     sounds.clear();
 
-    std::string dir = folder;
-    if (!current_folder.empty())
-        dir = folder + "/" + current_folder;
+    if (!std::filesystem::exists(folder))
+        std::filesystem::create_directories(folder);
 
-    if (!std::filesystem::exists(dir))
-        std::filesystem::create_directories(dir);
-
-    for (auto& entry : std::filesystem::directory_iterator(dir))
+    for (auto& entry : std::filesystem::recursive_directory_iterator(folder))
     {
         if (!entry.is_regular_file()) continue;
 
@@ -328,7 +344,12 @@ void load_sounds(const std::string& folder)
             auto s = std::make_unique<Sound>();
             s->name = path_to_utf8(entry.path().stem());
             s->path = path_to_utf8(entry.path());
-            s->folder = current_folder;
+
+            // Compute folder relative to the root sounds/ directory
+            std::string rel = std::filesystem::relative(entry.path(), folder).string();
+            for (auto& c : rel) if (c == '\\') c = '/';
+            auto parent = std::filesystem::path(rel).parent_path().string();
+            s->folder = parent;
 
             ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
             if (ma_decoder_init_file(short_path(s->path).c_str(), &cfg, &s->vis_decoder) == MA_SUCCESS)
@@ -337,6 +358,11 @@ void load_sounds(const std::string& folder)
             sounds.push_back(std::move(s));
         }
     }
+}
+
+void stop_all_sounds()
+{
+    for (auto& s : sounds) stop_sound(*s);
 }
 
 void delete_sound(Sound* sound)

@@ -6,7 +6,12 @@
 using json = nlohmann::json;
 
 void save_config_to_json() {
+    // Load existing config to preserve profiles not in current view
     json j;
+    {
+        std::ifstream inflie("config.json");
+        if (inflie.is_open()) inflie >> j;
+    }
 
     j["hardware"]["selected_speaker_idx"] = selected_speaker_idx;
     j["hardware"]["selected_virtual_idx"] = selected_virtual_idx;

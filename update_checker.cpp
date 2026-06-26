@@ -15,6 +15,7 @@ bool g_update_available = false;
 std::string g_latest_version;
 std::string g_update_url;
 std::string g_download_url;
+std::string g_release_notes;
 bool g_download_progress = false;
 std::string g_update_check_status;
 
@@ -26,7 +27,7 @@ static std::string http_get(const std::string& path) {
     cli.set_read_timeout(30);
     cli.set_default_headers({
         {"Accept", "application/vnd.github.v3+json"},
-        {"User-Agent", "JamBoard/3.8 (https://github.com/project-jam/jamboard)"}
+        {"User-Agent", std::string("JamBoard/") + JAMBOARD_VERSION + " (https://github.com/project-jam/jamboard)"}
     });
 
     auto res = cli.Get(path);
@@ -38,7 +39,7 @@ static bool download_file(const std::string& host, const std::string& path, cons
     httplib::SSLClient cli(host);
     cli.set_connection_timeout(10);
     cli.set_read_timeout(300);
-    cli.set_default_headers({{"User-Agent", "JamBoard/3.8"}});
+    cli.set_default_headers({{"User-Agent", std::string("JamBoard/") + JAMBOARD_VERSION}});
 
     auto res = cli.Get(path);
     if (!res) return false;
@@ -75,7 +76,7 @@ static bool download_file(const std::string& host, const std::string& path, cons
         httplib::SSLClient new_cli(new_host);
         new_cli.set_connection_timeout(10);
         new_cli.set_read_timeout(300);
-        new_cli.set_default_headers({{"User-Agent", "JamBoard/3.8"}});
+        new_cli.set_default_headers({{"User-Agent", std::string("JamBoard/") + JAMBOARD_VERSION}});
         res = new_cli.Get(new_path);
         if (!res) return false;
         attempts++;
@@ -137,6 +138,7 @@ static void check_impl() {
         g_latest_version = tag;
         g_update_url = j.value("html_url", "");
         g_download_url = download_url;
+        g_release_notes = j.value("body", "");
         g_update_available = true;
         g_update_check_status = "Update available: " + tag;
     } catch (...) {

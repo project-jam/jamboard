@@ -25,6 +25,7 @@ void shutdown_audio_routing();
 bool setup_audio_routing();
 
 void load_sounds(const std::string& folder);
+void stop_all_sounds();
 void play_sound(Sound& sound);
 void stop_sound(Sound& sound);
 void toggle_pause_sound(Sound& sound);

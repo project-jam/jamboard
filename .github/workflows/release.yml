@@ -102,11 +102,13 @@ jobs:
           cp *.dll dist/ 2>/dev/null || true
           cp yt-dlp.exe dist/ 2>/dev/null || true
           cd dist
+          # The archive has to end up inside dist so it gets uploaded
           if command -v zip >/dev/null 2>&1; then
-            zip -r ../jamboard-windows-x86_64.zip .
+            zip -r jamboard-windows-x86_64.zip .
           else
-            tar -czf ../jamboard-windows-x86_64.tar.gz .
+            tar -czf jamboard-windows-x86_64.tar.gz .
           fi
+          ls -la
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

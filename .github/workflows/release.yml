@@ -82,6 +82,7 @@ jobs:
           install: >-
             base-devel
             curl
+            zip
             mingw-w64-ucrt-x86_64-toolchain
             mingw-w64-ucrt-x86_64-glfw
             mingw-w64-ucrt-x86_64-ffmpeg
@@ -100,7 +101,12 @@ jobs:
           cp jamboard.exe dist/
           cp *.dll dist/ 2>/dev/null || true
           cp yt-dlp.exe dist/ 2>/dev/null || true
-          cd dist && zip -r ../jamboard-windows-x86_64.zip .
+          cd dist
+          if command -v zip >/dev/null 2>&1; then
+            zip -r ../jamboard-windows-x86_64.zip .
+          else
+            tar -czf ../jamboard-windows-x86_64.tar.gz .
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

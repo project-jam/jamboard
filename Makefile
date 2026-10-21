@@ -95,7 +95,8 @@ $(STAMP):
 	@rm -f $(OBJDIR)/.src-* 2>/dev/null || true
 	@touch $@
 
-dlls:
+# The dlls have to be collected after the binary is linked
+dlls: $(TARGET)
 ifeq ($(UNAME_S),Linux)
 	@echo "No DLLs needed on Linux."
 else ifeq ($(UNAME_S),Darwin)

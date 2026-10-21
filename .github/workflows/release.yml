@@ -95,12 +95,21 @@ jobs:
           make -j"$(nproc)"
           make deps
 
+      - name: Build the installer
+        run: |
+          choco install innosetup --no-progress --limit-output -y
+          cd install
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" setup.iss
+          cd ..
+
       - name: Package
         run: |
           mkdir -p dist
           cp jamboard.exe dist/
           cp *.dll dist/ 2>/dev/null || true
           cp yt-dlp.exe dist/ 2>/dev/null || true
+          cp zpix.ttf dist/ 2>/dev/null || true
+          cp install/JamBoard_Setup.exe dist/ 2>/dev/null || true
           cd dist
           # The archive has to end up inside dist so it gets uploaded
           if command -v zip >/dev/null 2>&1; then
@@ -134,5 +143,6 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
           files: release/*
           generate_release_notes: true

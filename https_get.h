@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <cstdlib>
+#include <cctype>
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>

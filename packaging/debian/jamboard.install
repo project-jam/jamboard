@@ -1,0 +1,4 @@
+jamboard usr/bin
+jamboard.desktop usr/share/applications
+jamboard.svg usr/share/icons/hicolor/scalable/apps
+zpix.ttf usr/share/jamboard

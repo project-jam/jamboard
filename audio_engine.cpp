@@ -1,13 +1,16 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "audio_engine.h"
 #include "config.h"
+#include "platform.h"
+#include <cctype>
+#include <vector>
 #include <iostream>
 #include <cstring>
 #include <cmath>
 #include <algorithm>
 #include <filesystem>
-#include <windows.h>
 
+#ifdef _WIN32
 // Convert UTF-8 path to 8.3 short path so miniaudio (which uses fopen) can handle unicode
 static std::string short_path(const std::string& utf8) {
     wchar_t wide[MAX_PATH];
@@ -37,6 +40,12 @@ static std::string path_to_utf8(const std::filesystem::path& p) {
     WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &result[0], len, NULL, NULL);
     return result;
 }
+#else
+// On Linux/macOS, paths are already UTF-8 — simple pass-through
+static std::string short_path(const std::string& utf8) { return utf8; }
+static std::filesystem::path utf8_to_path(const std::string& utf8) { return std::filesystem::path(utf8); }
+static std::string path_to_utf8(const std::filesystem::path& p) { return p.string(); }
+#endif
 
 // ================= INIT =================
 
@@ -270,6 +279,113 @@ void stop_sound(Sound& sound)
         }
     }
     sound.active_voices.clear();
+}
+
+void play_temp_sound(const std::string& path)
+{
+    ma_sound* spk = nullptr;
+    ma_sound* vrt = nullptr;
+
+    if (speakers_engine_initialized) {
+        spk = new ma_sound();
+        if (ma_sound_init_from_file(&engine_speakers, short_path(path).c_str(), 0, NULL, NULL, spk) == MA_SUCCESS) {
+            ma_sound_start(spk);
+        } else {
+            delete spk;
+            spk = nullptr;
+        }
+    }
+
+    if (virtual_engine_initialized) {
+        vrt = new ma_sound();
+        if (ma_sound_init_from_file(&engine_virtual, short_path(path).c_str(), 0, NULL, NULL, vrt) == MA_SUCCESS) {
+            ma_sound_start(vrt);
+        } else {
+            delete vrt;
+            vrt = nullptr;
+        }
+    }
+
+    if (spk || vrt) {
+        while ((spk && ma_sound_is_playing(spk)) || (vrt && ma_sound_is_playing(vrt))) {
+            sleep_ms(50);
+        }
+        if (spk) {
+            ma_sound_uninit(spk);
+            delete spk;
+        }
+        if (vrt) {
+            ma_sound_uninit(vrt);
+            delete vrt;
+        }
+    } else {
+#ifdef _WIN32
+        PlaySoundA(path.c_str(), NULL, SND_FILENAME | SND_SYNC);
+#else
+        std::string cmd = "paplay \"" + path + "\" 2>/dev/null || aplay -q \"" + path + "\" 2>/dev/null || ffplay -nodisp -autoexit -loglevel quiet \"" + path + "\" 2>/dev/null";
+        system(cmd.c_str());
+#endif
+    }
+}
+
+Sound* find_voice_trigger_sound(const std::string& text) {
+    if (text.empty()) return nullptr;
+
+    // Split the text into words so a trigger only matches whole words.
+    std::vector<std::string> words;
+    {
+        std::string current;
+        for (char c : text) {
+            if (isalnum((unsigned char)c) || c == '_' || c == '\'') {
+                current += c;
+            } else {
+                if (!current.empty()) { words.push_back(current); current.clear(); }
+            }
+        }
+        if (!current.empty()) words.push_back(current);
+    }
+
+    for (auto& s : sounds) {
+        if (!s || s->voice_trigger.empty()) continue;
+
+        std::string trigger = s->voice_trigger;
+        // Trim it
+        while (!trigger.empty() && isspace((unsigned char)trigger.front())) trigger.erase(trigger.begin());
+        while (!trigger.empty() && isspace((unsigned char)trigger.back())) trigger.pop_back();
+        if (trigger.empty()) continue;
+
+        std::string lower_trigger = trigger;
+        for (auto& c : lower_trigger) c = (char)tolower((unsigned char)c);
+
+        for (const auto& w : words) {
+            if (trigger_case_sensitive) {
+                if (w == trigger) return s.get();
+            } else {
+                std::string lower_word = w;
+                for (auto& c : lower_word) c = (char)tolower((unsigned char)c);
+                if (lower_word == lower_trigger) return s.get();
+            }
+        }
+    }
+    return nullptr;
+}
+
+void play_temp_sound_speakers_only(const std::string& path)
+{
+    if (!speakers_engine_initialized) {
+        play_temp_sound(path);
+        return;
+    }
+
+    ma_sound* spk = new ma_sound();
+    if (ma_sound_init_from_file(&engine_speakers, short_path(path).c_str(), 0, NULL, NULL, spk) == MA_SUCCESS) {
+        ma_sound_start(spk);
+        while (ma_sound_is_playing(spk)) {
+            sleep_ms(50);
+        }
+        ma_sound_uninit(spk);
+    }
+    delete spk;
 }
 
 void toggle_pause_sound(Sound& sound)

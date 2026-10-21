@@ -1,6 +1,6 @@
 [Setup]
 AppName=JamBoard
-AppVersion=4.1
+AppVersion=4.2
 AppPublisher=Project Jam
 DefaultDirName={autopf}\JamBoard
 DefaultGroupName=JamBoard

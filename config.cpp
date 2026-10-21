@@ -1,5 +1,7 @@
 #include "config.h"
 #include "data_models.h"
+#include "platform.h"
+#include "acronyms.h"
 #include "json.hpp"
 #include <fstream>
 
@@ -9,7 +11,7 @@ void save_config_to_json() {
     // Load existing config to preserve profiles not in current view
     json j;
     {
-        std::ifstream inflie("config.json");
+        std::ifstream inflie(config_file_path());
         if (inflie.is_open()) inflie >> j;
     }
 
@@ -26,6 +28,21 @@ void save_config_to_json() {
     j["hardware"]["mic_passthrough_enabled"] = mic_passthrough_enabled;
     j["hardware"]["vis_fps_mode"] = vis_fps_mode;
     j["hardware"]["vis_fps"] = vis_fps;
+    j["hardware"]["update_check_enabled"] = update_check_enabled;
+
+    // Acronyms live in their own json array so they can be edited by hand
+    j["acronyms"] = json::array();
+    for (const auto& ac : acronyms) {
+        json aj;
+        aj["acronym"] = ac.acronym;
+        aj["expansion"] = ac.expansion;
+        aj["group"] = ac.group;
+        aj["enabled"] = ac.enabled;
+        aj["blocked"] = ac.blocked;
+        j["acronyms"].push_back(aj);
+    }
+    j["acronym_settings"]["case_sensitive"] = acronym_case_sensitive;
+    j["trigger_settings"]["case_sensitive"] = trigger_case_sensitive;
 
     for (const auto& s : sounds) {
         json sj;
@@ -40,6 +57,7 @@ void save_config_to_json() {
         sj["volume_amp"] = s->volume_amp;
         sj["hotkey"] = s->hotkey;
         sj["web_url"] = s->web_url;
+        sj["voice_trigger"] = s->voice_trigger;
 
         sj["fx"]["pan"] = s->fx.pan;
         sj["fx"]["fade_in"] = s->fx.fade_in;
@@ -145,13 +163,17 @@ void save_config_to_json() {
         j["profiles"][profile_key] = sj;
     }
 
-    std::ofstream file("config.json");
+    std::ofstream file(config_file_path());
     if (file.is_open()) file << j.dump(4);
 }
 
 void load_config_from_json() {
-    std::ifstream file("config.json");
-    if (!file.is_open()) return;
+    std::ifstream file(config_file_path());
+    if (!file.is_open()) {
+        // No config yet, start with the default acronyms.
+        load_default_acronyms();
+        return;
+    }
 
     json j;
     file >> j;
@@ -169,6 +191,29 @@ void load_config_from_json() {
         mic_passthrough_enabled = j["hardware"].value("mic_passthrough_enabled", false);
         vis_fps_mode = j["hardware"].value("vis_fps_mode", 0);
         vis_fps = j["hardware"].value("vis_fps", 30);
+        update_check_enabled = j["hardware"].value("update_check_enabled", update_check_enabled);
+    }
+
+    // Acronyms
+    if (j.contains("acronym_settings")) {
+        acronym_case_sensitive = j["acronym_settings"].value("case_sensitive", acronym_case_sensitive);
+    }
+    if (j.contains("trigger_settings")) {
+        trigger_case_sensitive = j["trigger_settings"].value("case_sensitive", trigger_case_sensitive);
+    }
+    if (j.contains("acronyms") && j["acronyms"].is_array()) {
+        acronyms.clear();
+        for (auto& aj : j["acronyms"]) {
+            Acronym ac;
+            ac.acronym = aj.value("acronym", "");
+            ac.expansion = aj.value("expansion", "");
+            ac.group = aj.value("group", "");
+            ac.enabled = aj.value("enabled", true);
+            ac.blocked = aj.value("blocked", false);
+            if (!ac.acronym.empty()) acronyms.push_back(ac);
+        }
+    } else {
+        load_default_acronyms();
     }
 
     if (j.contains("profiles")) {
@@ -188,6 +233,7 @@ void load_config_from_json() {
             s->volume_amp = sj.value("volume_amp", 1.0f);
             s->hotkey = sj.value("hotkey", -1);
             s->web_url = sj.value("web_url", "");
+            s->voice_trigger = sj.value("voice_trigger", "");
 
             if (!sj.contains("fx")) continue;
             auto fx = sj["fx"];
@@ -296,14 +342,14 @@ void load_config_from_json() {
 }
 
 static json load_config_file() {
-    std::ifstream file("config.json");
+    std::ifstream file(config_file_path());
     json j;
     if (file.is_open()) file >> j;
     return j;
 }
 
 static void save_config_file(const json& j) {
-    std::ofstream file("config.json");
+    std::ofstream file(config_file_path());
     if (file.is_open()) file << j.dump(4);
 }
 

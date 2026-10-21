@@ -10,3 +10,7 @@ ytdlp_tmp/
 *.ppm
 config.json
 imgui.ini
+dist/
+*.deb
+*.rpm
+yt-dlp

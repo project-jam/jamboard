@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+# JamBoard ships a prebuilt binary; this package is binary only.
+
+export DH_VERBOSE = 1
+export DEB_BUILD_OPTIONS = nocheck
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	# The binary is staged by "make deb" before dpkg-buildpackage runs.
+
+override_dh_auto_test:
+	# No test suite.

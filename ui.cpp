@@ -11,7 +11,10 @@
 #include "config.h"
 #include "update_checker.h"
 #include "myinstants.h"
+#include "tts.h"
+#include "acronyms.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -24,8 +27,11 @@
 #include <commdlg.h>
 #endif
 
+#include "platform.h"
+
 #include <GL/gl.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <thread>
 #include <filesystem>
@@ -102,6 +108,7 @@ void shutdown_ui() {
     }
 }
 
+#ifdef _WIN32
 static std::string path_to_utf8(const std::filesystem::path& p) {
     std::wstring w = p.wstring();
     int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0, NULL, NULL);
@@ -110,6 +117,9 @@ static std::string path_to_utf8(const std::filesystem::path& p) {
     WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &result[0], len, NULL, NULL);
     return result;
 }
+#else
+static std::string path_to_utf8(const std::filesystem::path& p) { return p.string(); }
+#endif
 
 // Helper: format seconds to mm:ss
 static std::string fmt_time(float sec) {
@@ -250,6 +260,11 @@ static bool FxCheck(const char* label, bool* var) {
 static bool FxHeader(const char* label) {
     return ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
 }
+
+
+// Deferred delete of an acronym, the popup is opened at the top level.
+static bool g_tts_delete_request = false;
+static int  g_tts_delete_index = -1;
 
 bool draw_ui() {
     // Process deferred sound deletion (safe, outside of any sound iteration)
@@ -806,15 +821,9 @@ bool draw_ui() {
                             if (ImGui::MenuItem("Play")) { play_sound(*s); }
                             if (ImGui::MenuItem("Stop")) { stop_sound(*s); }
                             if (ImGui::MenuItem("Set Artwork...")) {
-                                char filename[MAX_PATH] = {};
-                                OPENFILENAMEA ofn = {};
-                                ofn.lStructSize = sizeof(ofn);
-                                ofn.hwndOwner = NULL;
-                                ofn.lpstrFilter = "Image Files\0*.jpg;*.jpeg;*.png;*.bmp;*.tga;*.ppm\0All Files\0*.*\0";
-                                ofn.lpstrFile = filename;
-                                ofn.nMaxFile = MAX_PATH;
-                                ofn.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
-                                if (GetOpenFileNameA(&ofn)) {
+                                std::string filename = show_file_picker("Select Image",
+                                    "Image Files|*.jpg;*.jpeg;*.png;*.bmp;*.tga;*.ppm|All Files|*.*");
+                                if (!filename.empty()) {
                                     std::string ext = std::filesystem::path(filename).extension().string();
                                     std::string dest = "sounds/";
                                     if (!s->folder.empty()) dest += s->folder + "/";
@@ -875,8 +884,8 @@ bool draw_ui() {
 
                         ImGui::PopID();
                     }
-                    ImGui::EndTable();
                 }
+                ImGui::EndTable();
             }
 
             // Right-click on grid background (empty area)
@@ -972,6 +981,57 @@ bool draw_ui() {
             }
             if (active_count == 0)
                 ImGui::TextDisabled("\n   No tracks running.\n   Engine Idle.");
+
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Voice Triggers");
+            ImGui::Separator();
+
+            bool trig_case = trigger_case_sensitive;
+            if (ImGui::Checkbox("Case sensitive", &trig_case)) {
+                trigger_case_sensitive = trig_case;
+                save_config_to_json();
+            }
+            ImGui::TextDisabled("Say the word in the TTS box to fire the sound.");
+            ImGui::Spacing();
+
+            // Set the trigger of the sound that is selected right now
+            if (current_selected_sound) {
+                static char trig_edit[64] = "";
+                static int trig_edit_id = -1;
+                if (trig_edit_id != (int)(uintptr_t)current_selected_sound) {
+                    trig_edit_id = (int)(uintptr_t)current_selected_sound;
+                    strncpy(trig_edit, current_selected_sound->voice_trigger.c_str(), sizeof(trig_edit) - 1);
+                    trig_edit[sizeof(trig_edit) - 1] = '\0';
+                }
+                ImGui::TextDisabled("%s", display_name(current_selected_sound->name).c_str());
+                ImGui::SetNextItemWidth(110);
+                ImGui::InputText("##trig", trig_edit, sizeof(trig_edit));
+                ImGui::SameLine();
+                if (ImGui::Button("Set", ImVec2(45, 0))) {
+                    current_selected_sound->voice_trigger = trig_edit;
+                    save_config_to_json();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Clear", ImVec2(50, 0))) {
+                    current_selected_sound->voice_trigger.clear();
+                    trig_edit[0] = '\0';
+                    save_config_to_json();
+                }
+            } else {
+                ImGui::TextDisabled("Select a sound to set its trigger.");
+            }
+
+            // Every trigger that is set
+            int trigger_count = 0;
+            for (auto& s : sounds) {
+                if (!s || s->voice_trigger.empty()) continue;
+                trigger_count++;
+                ImGui::Text("%s", s->voice_trigger.c_str());
+                ImGui::SameLine();
+                ImGui::TextDisabled("-> %s", display_name(s->name).c_str());
+            }
+            if (trigger_count == 0)
+                ImGui::TextDisabled("No triggers set.");
             ImGui::EndChild();
 
             // ---------- BOTTOM BAR ----------
@@ -1669,14 +1729,17 @@ bool draw_ui() {
                             std::thread([item, i]() {
                                 std::string data_dir;
                                 if (program_files_mode) {
-                                    char* appdata = getenv("APPDATA");
-                                    if (appdata) data_dir = std::string(appdata) + "\\JamBoard";
+                                    data_dir = get_data_dir();
+                                } else if (!app_data_dir().empty()) {
+                                    data_dir = app_data_dir();
                                 } else {
-                                    char buf[MAX_PATH];
-                                    GetFullPathNameA(".", MAX_PATH, buf, NULL);
-                                    data_dir = buf;
+                                    data_dir = get_cwd();
                                 }
+#ifdef _WIN32
                                 std::string sounds_dir = data_dir + "\\sounds";
+#else
+                                std::string sounds_dir = data_dir + "/sounds";
+#endif
                                 std::filesystem::create_directories(sounds_dir);
                                 myinstants_download(item, sounds_dir);
                                 mi_downloading_idx = -1;
@@ -1702,7 +1765,651 @@ bool draw_ui() {
         }
 
         // ==========================================
-        // TAB 4: SETTINGS
+        // TAB 4: TEXT-TO-SPEECH
+        // ==========================================
+        if (ImGui::BeginTabItem("TTS")) {
+            static char tts_text[4096] = "";
+            static int tts_voice_idx = 0;
+            static int tts_volume = 0;
+            static int tts_pitch = 0;
+            static int tts_rate = 0;
+            static bool tts_generating = false;
+            static std::string tts_error;
+            static std::string tts_translate_result;
+            static bool tts_translate_ready = false;
+            static int tts_translate_lang_idx = 0;
+            static int tts_selected_acronym = -1;
+            static char tts_new_acronym[128] = "";
+            static char tts_new_expansion[256] = "";
+            static char tts_new_group[64] = "";
+            static std::string tts_expanded_preview;
+            static bool tts_show_expanded = false;
+            static bool tts_trigger_fired = false;
+            static std::string tts_trigger_name;
+            static int tts_menu_acronym = -1;
+            static int tts_menu_action = 0;
+            static bool tts_menu_request = false;
+            static bool tts_group_popup = false;
+            static char tts_group_name[64] = "";
+            static bool tts_create_popup = false;
+            static int tts_create_open_delay = 0;
+            static char tts_create_word[128] = "";
+            static char tts_create_expansion[256] = "";
+            static char tts_create_group[64] = "";
+            static bool tts_popup_fresh = false;
+
+            static const char* tts_langs[] = {
+                "English", "Spanish", "French", "German", "Italian",
+                "Portuguese", "Russian", "Japanese", "Korean", "Chinese",
+                "Arabic", "Hindi", "Turkish", "Dutch", "Polish",
+                "Swedish", "Thai", "Vietnamese", "Indonesian", "Czech",
+            };
+            static const char* tts_lang_codes[] = {
+                "en", "es", "fr", "de", "it",
+                "pt", "ru", "ja", "ko", "zh",
+                "ar", "hi", "tr", "nl", "pl",
+                "sv", "th", "vi", "id", "cs",
+            };
+            static const int tts_lang_count = sizeof(tts_langs) / sizeof(tts_langs[0]);
+
+            if (tts_translate_ready) {
+                strncpy(tts_text, tts_translate_result.c_str(), sizeof(tts_text) - 1);
+                tts_text[sizeof(tts_text) - 1] = '\0';
+                tts_translate_result.clear();
+                tts_translate_ready = false;
+            }
+
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Text-to-Speech (Edge TTS)");
+            ImGui::Spacing();
+
+            // Two columns: the text and controls on the left, the acronym
+            // list on the right.
+            ImGui::BeginTable("##tts_layout", 2, ImGuiTableFlags_SizingStretchSame);
+            ImGui::TableSetupColumn("##tts_main", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("##tts_side", ImGuiTableColumnFlags_WidthFixed, 320.0f);
+            ImGui::TableNextRow();
+
+            // ---------------- left column ----------------
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+
+            ImGui::TextDisabled("Text to speak");
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputTextMultiline("##tts_text", tts_text, sizeof(tts_text),
+                ImVec2(0, 100), ImGuiInputTextFlags_None);
+
+            // Right click in the text box adds the word under the cursor to
+            // the acronym list.
+            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                ImGui::OpenPopup("Set Acronym");
+                tts_popup_fresh = true;
+            }
+            if (ImGui::BeginPopup("Set Acronym")) {
+                static char tts_popup_word[128] = "";
+                static char tts_popup_expansion[256] = "";
+                if (tts_popup_fresh) {
+                    tts_popup_fresh = false;
+                    // Take the selected text of the input box, or the word
+                    // that sits under the mouse when there is no selection.
+                    std::string current(tts_text);
+                    std::string picked;
+                    ImGuiInputTextState* st = ImGui::GetInputTextState(ImGui::GetID("##tts_text"));
+                    if (st && st->Stb) {
+                        if (st->HasSelection()) {
+                            int a = st->GetSelectionStart();
+                            int b = st->GetSelectionEnd();
+                            if (a < 0) a = 0;
+                            if (b > (int)current.size()) b = (int)current.size();
+                            if (b > a) picked = current.substr(a, b - a);
+                        }
+                        if (picked.empty()) {
+                            int caret = st->GetCursorPos();
+                            if (caret >= 0 && caret <= (int)current.size()) {
+                                // Walk back to the start of the word
+                                int start = caret;
+                                while (start > 0 && !isspace((unsigned char)current[start - 1]) &&
+                                       !ispunct((unsigned char)current[start - 1])) start--;
+                                int end = caret;
+                                while (end < (int)current.size() && !isspace((unsigned char)current[end]) &&
+                                       !ispunct((unsigned char)current[end])) end++;
+                                if (end > start) picked = current.substr(start, end - start);
+                            }
+                        }
+                    }
+                    strncpy(tts_popup_word, picked.c_str(), sizeof(tts_popup_word) - 1);
+                    tts_popup_word[sizeof(tts_popup_word) - 1] = '\0';
+                    tts_popup_expansion[0] = '\0';
+                }
+                ImGui::TextDisabled("Word");
+                ImGui::InputText("##acr_word", tts_popup_word, sizeof(tts_popup_word));
+                ImGui::TextDisabled("Reads as");
+                ImGui::InputText("##acr_exp", tts_popup_expansion, sizeof(tts_popup_expansion));
+                ImGui::Spacing();
+                if (ImGui::Button("Add", ImVec2(100, 0))) {
+                    std::string w = tts_popup_word;
+                    std::string e = tts_popup_expansion;
+                    // Trim the word
+                    size_t sp = w.find_first_of(" \t\n");
+                    if (sp != std::string::npos) w = w.substr(0, sp);
+                    if (!w.empty()) {
+                        // Replace an existing entry with the same word
+                        bool found = false;
+                        for (auto& ac : acronyms) {
+                            if (to_lower_copy(ac.acronym) == to_lower_copy(w)) {
+                                ac.expansion = e;
+                                ac.blocked = e.empty();
+                                ac.enabled = true;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            Acronym ac;
+                            ac.acronym = w;
+                            ac.expansion = e;
+                            ac.group = "Custom";
+                            ac.blocked = e.empty();
+                            acronyms.push_back(ac);
+                        }
+                        save_config_to_json();
+                    }
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+            ImGui::Spacing();
+
+            // Voice and character count
+            ImGui::TextDisabled("Voice");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(230);
+            if (ImGui::BeginCombo("##tts_voice", TTS_VOICES[tts_voice_idx].name)) {
+                for (int i = 0; i < TTS_VOICE_COUNT; i++) {
+                    bool is_selected = (i == tts_voice_idx);
+                    if (ImGui::Selectable(TTS_VOICES[i].name, is_selected))
+                        tts_voice_idx = i;
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d characters", (int)strlen(tts_text));
+            ImGui::Spacing();
+
+            // Live volume / pitch / rate. A table keeps them in one row
+            // no matter how narrow the window gets.
+            if (ImGui::BeginTable("##tts_sliders", 3,
+                    ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("Volume");
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::SliderInt("##tts_vol", &tts_volume, -100, 100, "%d%%")) {
+                    if (g_tts_is_playing) tts_set_live_params(tts_volume, tts_pitch, tts_rate);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How loud the speech is.\nChanges apply to the sound that is playing.");
+
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("Pitch");
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::SliderInt("##tts_pit", &tts_pitch, -50, 50, "%dHz")) {
+                    if (g_tts_is_playing) tts_set_live_params(tts_volume, tts_pitch, tts_rate);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How high or low the voice sounds.\nNegative is lower, positive is higher.");
+
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("Rate");
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::SliderInt("##tts_rat", &tts_rate, -100, 100, "%d%%")) {
+                    if (g_tts_is_playing) tts_set_live_params(tts_volume, tts_pitch, tts_rate);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How fast the speech is.\nNegative is slower, positive is faster.");
+
+                ImGui::EndTable();
+            }
+            if (g_tts_is_playing) {
+                ImGui::TextDisabled("Changes are applied to the sound that is playing right now.");
+            }
+            ImGui::Spacing();
+
+            // Karaoke subtitle — full paragraph with auto-scroll
+            if (g_tts_is_playing && !g_tts_word_boundaries.empty()) {
+                int current_word = tts_get_current_word_index();
+
+                ImGui::TextDisabled("Word %d / %d", current_word + 1, (int)g_tts_word_boundaries.size());
+                ImGui::Spacing();
+
+                ImGui::BeginChild("##tts_subtitle", ImVec2(0, ImGui::GetFontSize() * 6), true);
+                for (int i = 0; i < (int)g_tts_word_boundaries.size(); i++) {
+                    ImVec4 color;
+                    if (i == current_word)
+                        color = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
+                    else
+                        color = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+
+                    ImGui::PushStyleColor(ImGuiCol_Text, color);
+                    ImGui::TextUnformatted(g_tts_word_boundaries[i].text.c_str());
+                    ImGui::PopStyleColor();
+                    if (i < (int)g_tts_word_boundaries.size() - 1)
+                        ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
+                }
+
+                if (current_word >= 0) {
+                    float scroll_y = ImGui::GetScrollY();
+                    float win_h = ImGui::GetWindowHeight();
+                    float cursor_y = ImGui::GetCursorPosY();
+                    if (cursor_y > scroll_y + win_h - ImGui::GetFontSize() * 2) {
+                        ImGui::SetScrollHereY(0.8f);
+                    }
+                }
+                ImGui::EndChild();
+                ImGui::Spacing();
+            }
+
+            // ---------------- buttons ----------------
+            bool can_gen = strlen(tts_text) > 0 && !tts_generating;
+            bool is_playing = g_tts_is_playing;
+
+            if (!can_gen)
+                ImGui::BeginDisabled();
+            if (ImGui::Button("Preview", ImVec2(100, 35))) {
+                // A voice trigger in the text fires a sound instead of
+                // speaking the text.
+                Sound* trig = find_voice_trigger_sound(tts_text);
+                if (trig) {
+                    tts_trigger_fired = true;
+                    tts_trigger_name = trig->name;
+                    play_sound(*trig);
+                } else {
+                    tts_generating = true;
+                    tts_error.clear();
+                    std::string text = expand_acronyms(tts_text);
+                    std::string voice = TTS_VOICES[tts_voice_idx].id;
+                    int vol = tts_volume;
+                    int pitch = tts_pitch;
+                    int rate = tts_rate;
+                    std::thread([text, voice, vol, pitch, rate]() {
+                        tts_preview(text, voice, vol, pitch, rate);
+                        tts_generating = false;
+                    }).detach();
+                }
+            }
+            if (!can_gen)
+                ImGui::EndDisabled();
+
+            ImGui::SameLine();
+
+            if (!is_playing)
+                ImGui::BeginDisabled();
+            if (ImGui::Button(g_tts_paused ? "Resume" : "Pause", ImVec2(100, 35))) {
+                tts_pause();
+            }
+            if (!is_playing)
+                ImGui::EndDisabled();
+
+            ImGui::SameLine();
+
+            if (!is_playing)
+                ImGui::BeginDisabled();
+            if (ImGui::Button("Stop", ImVec2(100, 35))) {
+                tts_stop();
+                tts_generating = false;
+            }
+            if (!is_playing)
+                ImGui::EndDisabled();
+
+            ImGui::SameLine();
+
+            if (!can_gen)
+                ImGui::BeginDisabled();
+            if (ImGui::Button("Talk", ImVec2(100, 35))) {
+                Sound* trig = find_voice_trigger_sound(tts_text);
+                if (trig) {
+                    tts_trigger_fired = true;
+                    tts_trigger_name = trig->name;
+                    play_sound(*trig);
+                } else {
+                    tts_generating = true;
+                    tts_error.clear();
+                    std::string text = expand_acronyms(tts_text);
+                    std::string voice = TTS_VOICES[tts_voice_idx].id;
+                    int vol = tts_volume;
+                    int pitch = tts_pitch;
+                    int rate = tts_rate;
+                    std::thread([text, voice, vol, pitch, rate]() {
+                        tts_talk(text, voice, vol, pitch, rate);
+                        tts_generating = false;
+                    }).detach();
+                }
+            }
+            if (!can_gen)
+                ImGui::EndDisabled();
+
+            ImGui::Spacing();
+
+            // Translate
+            if (!can_gen)
+                ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(120);
+            if (ImGui::BeginCombo("##tts_lang", tts_langs[tts_translate_lang_idx])) {
+                for (int i = 0; i < tts_lang_count; i++) {
+                    bool is_selected = (i == tts_translate_lang_idx);
+                    if (ImGui::Selectable(tts_langs[i], is_selected))
+                        tts_translate_lang_idx = i;
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Translate", ImVec2(120, 35))) {
+                tts_generating = true;
+                tts_error.clear();
+                std::string text = tts_text;
+                std::string lang = tts_lang_codes[tts_translate_lang_idx];
+                std::thread([text, lang]() {
+                    std::string translated = tts_translate(text, lang);
+                    tts_translate_result = translated;
+                    tts_translate_ready = true;
+                    tts_generating = false;
+                }).detach();
+            }
+            if (!can_gen)
+                ImGui::EndDisabled();
+
+            // Preview of what will actually be spoken
+            ImGui::SameLine();
+            if (ImGui::Button("Show expanded", ImVec2(120, 35))) {
+                tts_expanded_preview = expand_acronyms(tts_text);
+                tts_show_expanded = !tts_show_expanded;
+            }
+            if (tts_show_expanded) {
+                ImGui::Spacing();
+                ImGui::TextDisabled("Spoken text:");
+                ImGui::TextWrapped("%s", tts_expanded_preview.c_str());
+            }
+
+            if (tts_trigger_fired) {
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1), "Triggered: %s", tts_trigger_name.c_str());
+                tts_trigger_fired = false;
+            }
+
+            if (tts_generating)
+                ImGui::TextColored(ImVec4(1, 1, 0, 1), "Generating...");
+
+            if (!tts_error.empty())
+                ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "%s", tts_error.c_str());
+
+            // ---------------- right column: the acronym list ----------------
+            ImGui::TableNextColumn();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Acronyms");
+            ImGui::TextDisabled("Right click a word to change it or give it a new group.");
+            ImGui::Spacing();
+
+            bool case_sens = acronym_case_sensitive;
+            if (ImGui::Checkbox("Case sensitive", &case_sens)) {
+                acronym_case_sensitive = case_sens;
+                save_config_to_json();
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear all")) {
+                acronyms.clear();
+                tts_selected_acronym = -1;
+                save_config_to_json();
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("+")) {
+                tts_menu_acronym = -1;
+                tts_create_word[0] = '\0';
+                tts_create_expansion[0] = '\0';
+                tts_create_group[0] = '\0';
+                tts_create_popup = true;
+            }
+            ImGui::Spacing();
+
+            // The list of words, grouped
+            {
+                std::vector<std::string> groups;
+                for (const auto& ac : acronyms) {
+                    std::string g = ac.group.empty() ? "Ungrouped" : ac.group;
+                    if (std::find(groups.begin(), groups.end(), g) == groups.end())
+                        groups.push_back(g);
+                }
+                std::sort(groups.begin(), groups.end());
+
+                float acr_table_h = ImGui::GetContentRegionAvail().y - 130.0f;
+                if (acr_table_h < 80.0f) acr_table_h = 80.0f;
+                bool acr_table_open = ImGui::BeginTable("##tts_acronyms", 3,
+                        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                        ImVec2(0, acr_table_h));
+                if (acr_table_open) {
+                    ImGui::TableSetupColumn("Word", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+                    ImGui::TableSetupColumn("Reads as", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                    ImGui::TableSetupScrollFreeze(0, 1);
+                    ImGui::TableHeadersRow();
+
+                    bool removed = false;
+                    for (const auto& g : groups) {
+                        if (removed) break;
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+                        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2.0f, 2.0f));
+                        ImGui::Selectable(g.c_str(), false, ImGuiSelectableFlags_SpanAllColumns);
+                        ImGui::PopStyleVar();
+                        ImGui::PopStyleColor();
+
+
+                        for (size_t i = 0; i < acronyms.size() && !removed; i++) {
+                            const auto& ac = acronyms[i];
+                            std::string ag = ac.group.empty() ? "Ungrouped" : ac.group;
+                            if (ag != g) continue;
+
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::PushID((int)i);
+                            bool is_selected = (tts_selected_acronym == (int)i);
+                            bool colored = true;
+                            if (is_selected) {
+                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.9f, 0.3f, 1.0f));
+                            } else if (ac.blocked) {
+                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+                            } else if (!ac.enabled) {
+                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
+                            } else {
+                                colored = false;
+                            }
+                            // A selectable has an id, which the drag and
+                            // drop source needs.
+                            // A negative width would collapse the item to
+                            // four pixels, so the text gets cut off.
+                            if (ImGui::Selectable(ac.acronym.c_str(), is_selected, 0, ImVec2(0, 0)))
+                                tts_selected_acronym = (int)i;
+                            if (colored) ImGui::PopStyleColor();
+
+                            // Remember the row that was right clicked, the
+                            // menu itself is opened outside of the table.
+                            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                                ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                                tts_menu_acronym = (int)i;
+                                tts_menu_request = true;
+                            }
+
+                            ImGui::TableSetColumnIndex(1);
+                            if (ac.blocked) ImGui::TextDisabled("(not expanded)");
+                            else ImGui::TextUnformatted(ac.expansion.c_str());
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted(ac.group.c_str());
+
+                            ImGui::PopID();
+                        }
+                    }
+                }
+                ImGui::EndTable();
+
+                // The right click menu of a word
+                if (tts_menu_request) {
+                    tts_menu_request = false;
+                    ImGui::OpenPopup("##acr_word_menu");
+                }
+                if (ImGui::BeginPopup("##acr_word_menu")) {
+                    if (tts_menu_acronym >= 0 && tts_menu_acronym < (int)acronyms.size()) {
+                        const Acronym& mac = acronyms[tts_menu_acronym];
+                        ImGui::TextUnformatted(mac.acronym.c_str());
+                        ImGui::Separator();
+                        if (ImGui::MenuItem("Change...")) tts_menu_action = 1;
+                        if (ImGui::MenuItem("New group...")) tts_group_popup = true;
+                        if (ImGui::MenuItem(mac.blocked ? "Allow expanding" : "Never expand")) tts_menu_action = 2;
+                        bool men = mac.enabled;
+                        if (ImGui::MenuItem(mac.enabled ? "Disable" : "Enable")) tts_menu_action = 3;
+                        ImGui::Separator();
+                        if (ImGui::MenuItem("Delete")) {
+                            g_tts_delete_request = true;
+                            g_tts_delete_index = tts_menu_acronym;
+                        }
+                    }
+                    ImGui::EndPopup();
+                }
+
+                // Give a word a new group
+                if (tts_group_popup) {
+                    ImGui::OpenPopup("New Group");
+                    tts_group_popup = false;
+                    tts_group_name[0] = '\0';
+                }
+                if (ImGui::BeginPopupModal("New Group", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+                    ImGui::TextDisabled("Group name");
+                    ImGui::SetNextItemWidth(240);
+                    ImGui::InputText("##grpname", tts_group_name, sizeof(tts_group_name));
+                    ImGui::Spacing();
+                    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Create", ImVec2(120, 0))) {
+                        if (tts_menu_acronym >= 0 && tts_menu_acronym < (int)acronyms.size() &&
+                            strlen(tts_group_name) > 0) {
+                            acronyms[tts_menu_acronym].group = tts_group_name;
+                            save_config_to_json();
+                        }
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
+                }
+
+                // What was picked in the right click menu
+                if (tts_menu_action != 0 && tts_menu_acronym >= 0 &&
+                    tts_menu_acronym < (int)acronyms.size()) {
+                    if (tts_menu_action == 1) {
+                        tts_create_popup = true;
+                    } else if (tts_menu_action == 2) {
+                        Acronym& mac = acronyms[tts_menu_acronym];
+                        // Only the flag changes, the expansion is kept so
+                        // turning it back on restores the word.
+                        mac.blocked = !mac.blocked;
+                        save_config_to_json();
+                    } else if (tts_menu_action == 3) {
+                        Acronym& mac = acronyms[tts_menu_acronym];
+                        mac.enabled = !mac.enabled;
+                        save_config_to_json();
+                    }
+                }
+                tts_menu_action = 0;
+
+                // Right click on an empty spot adds a new word
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Right) && acronyms.empty()) {
+                    tts_menu_acronym = -1;
+                    tts_create_word[0] = '\0';
+                    tts_create_expansion[0] = '\0';
+                    tts_create_group[0] = '\0';
+                    tts_create_popup = true;
+                }
+            }
+
+            // Right click on a word opens this popup. It is opened a couple
+            // of frames later so it does not fight with the menu that
+            // asked for it.
+            if (tts_create_popup) {
+                tts_create_open_delay = 2;
+                tts_create_popup = false;
+            }
+            if (tts_create_open_delay > 0) {
+                if (--tts_create_open_delay == 0) {
+                    // Fill in the word that was clicked
+                    if (tts_menu_acronym >= 0 && tts_menu_acronym < (int)acronyms.size()) {
+                        const Acronym& ac = acronyms[tts_menu_acronym];
+                        strncpy(tts_create_word, ac.acronym.c_str(), sizeof(tts_create_word) - 1);
+                        tts_create_word[sizeof(tts_create_word) - 1] = '\0';
+                        strncpy(tts_create_expansion, ac.expansion.c_str(), sizeof(tts_create_expansion) - 1);
+                        tts_create_expansion[sizeof(tts_create_expansion) - 1] = '\0';
+                        strncpy(tts_create_group, ac.group.c_str(), sizeof(tts_create_group) - 1);
+                        tts_create_group[sizeof(tts_create_group) - 1] = '\0';
+                    }
+                    ImGui::OpenPopup("Create");
+                }
+            }
+            if (ImGui::BeginPopupModal("Create", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextDisabled("Word");
+                ImGui::SetNextItemWidth(240);
+                ImGui::InputText("##cw", tts_create_word, sizeof(tts_create_word));
+                ImGui::TextDisabled("Reads as");
+                ImGui::SetNextItemWidth(240);
+                ImGui::InputText("##ce", tts_create_expansion, sizeof(tts_create_expansion));
+                ImGui::TextDisabled("Group");
+                ImGui::SetNextItemWidth(240);
+                ImGui::InputText("##cg", tts_create_group, sizeof(tts_create_group));
+                ImGui::Spacing();
+                if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Done", ImVec2(120, 0))) {
+                    std::string w = tts_create_word;
+                    size_t sp = w.find_first_of(" \t\n");
+                    if (sp != std::string::npos) w = w.substr(0, sp);
+                    if (!w.empty()) {
+                        // Update the word that was clicked, or add it
+                        bool found = false;
+                        for (auto& ac : acronyms) {
+                            if (ac.acronym == w) {
+                                ac.expansion = tts_create_expansion;
+                                ac.group = tts_create_group;
+                                ac.blocked = strlen(tts_create_expansion) == 0;
+                                ac.enabled = true;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            Acronym ac;
+                            ac.acronym = w;
+                            ac.expansion = tts_create_expansion;
+                            ac.group = strlen(tts_create_group) > 0 ? tts_create_group : "Custom";
+                            ac.blocked = strlen(tts_create_expansion) == 0;
+                            acronyms.push_back(ac);
+                        }
+                        save_config_to_json();
+                    }
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+
+            ImGui::EndTable();
+
+            ImGui::EndTabItem();
+        }
+
+        // ==========================================
+        // TAB 5: SETTINGS
         // ==========================================
         if (ImGui::BeginTabItem("Settings")) {
             ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f),
@@ -1720,7 +2427,7 @@ bool draw_ui() {
                 &selected_speaker_idx,
                 [](void*, int idx) -> const char* {
                     static char buf[512];
-                    if (idx == 0) return "Default Windows Playback Device";
+                    if (idx == 0) return "Default Playback Device";
                     int dev = idx - 1;
                     if (dev >= (int)playbackDeviceCount) return "?";
                     if (playbackDevices[dev].isDefault)
@@ -1834,6 +2541,23 @@ bool draw_ui() {
             }
 
             ImGui::Spacing();
+
+            bool update_toggle = update_check_enabled;
+            if (ImGui::Checkbox("Check for updates automatically", &update_toggle)) {
+                update_check_enabled = update_toggle;
+                save_config_to_json();
+                if (update_check_enabled)
+                    start_update_checker();
+            }
+#ifdef _WIN32
+            ImGui::TextDisabled("Turn this off if you update JamBoard yourself.");
+#else
+            ImGui::TextDisabled("Turn this off if you install JamBoard from a package -");
+            ImGui::SameLine();
+            ImGui::TextDisabled("your package manager already handles updates.");
+#endif
+
+            ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
 
@@ -1845,6 +2569,32 @@ bool draw_ui() {
         }
 
         ImGui::EndTabBar();
+    }
+
+    // Confirm delete of an acronym — open deferred so it is outside of
+    // any popup or table scope
+    if (g_tts_delete_request) {
+        g_tts_delete_request = false;
+        ImGui::OpenPopup("Confirm Delete Acronym");
+    }
+    if (ImGui::BeginPopupModal("Confirm Delete Acronym", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (g_tts_delete_index >= 0 && g_tts_delete_index < (int)acronyms.size()) {
+            ImGui::Text("Are you sure you want to delete \"%s\"?",
+                        acronyms[g_tts_delete_index].acronym.c_str());
+        }
+        ImGui::Spacing();
+        if (ImGui::Button("Delete", ImVec2(120, 0))) {
+            if (g_tts_delete_index >= 0 && g_tts_delete_index < (int)acronyms.size()) {
+                acronyms.erase(acronyms.begin() + g_tts_delete_index);
+                save_config_to_json();
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     // Confirm Delete popup — open deferred (safe, outside any popup scope)
@@ -2034,9 +2784,17 @@ bool draw_ui() {
         if (g_download_progress) {
             ImGui::TextDisabled("Downloading...");
         } else {
+#ifdef _WIN32
             if (ImGui::Button("Download & Install", ImVec2(160, 0))) {
                 download_and_install();
             }
+#else
+            if (ImGui::Button("Open Release Page", ImVec2(160, 0))) {
+                download_and_install();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("(update through your package manager)");
+#endif
             ImGui::SameLine();
             if (ImGui::Button("Ignore", ImVec2(80, 0))) {
                 ImGui::CloseCurrentPopup();

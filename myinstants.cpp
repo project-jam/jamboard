@@ -1,10 +1,9 @@
 #include "myinstants.h"
 #include "import_ffmpeg.h"
 #include "httplib.h"
+#include "platform.h"
 #include <cstdio>
 #include <filesystem>
-#include <windows.h>
-#include <mmsystem.h>
 #include <thread>
 #include <atomic>
 
@@ -42,10 +41,8 @@ static std::string decode_html_entities(const std::string& s) {
 static std::atomic<bool> g_preview_playing{false};
 static std::string g_preview_wav;
 
-static std::string get_temp_dir() {
-    char buf[MAX_PATH];
-    GetTempPathA(MAX_PATH, buf);
-    return std::string(buf) + "JamBoard_Preview";
+static std::string get_preview_temp_dir() {
+    return get_temp_dir() + "/JamBoard_Preview";
 }
 
 static std::string safe_filename(const std::string& name) {
@@ -68,7 +65,7 @@ std::vector<MyInstant> myinstants_search(const std::string& query) {
     cli.set_default_headers({
         {"Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
         {"Accept-Language", "en-US,en;q=0.5"},
-        {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"}
+        {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"}
     });
 
     auto res = cli.Get("/en/search/?name=" + query);
@@ -143,7 +140,7 @@ bool myinstants_download(const MyInstant& item, const std::string& out_dir) {
     cli.set_connection_timeout(10);
     cli.set_read_timeout(30);
     cli.set_default_headers({
-        {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
     });
 
     auto res = cli.Get(path);
@@ -157,7 +154,7 @@ bool myinstants_download(const MyInstant& item, const std::string& out_dir) {
         if (url_ext.size() <= 5) ext = url_ext;
     }
 
-    std::string out_path = out_dir + "\\" + safe + ext;
+    std::string out_path = out_dir + "/" + safe + ext;
     FILE* fp = fopen(out_path.c_str(), "wb");
     if (!fp) return false;
     fwrite(res->body.data(), 1, res->body.size(), fp);
@@ -169,7 +166,7 @@ void myinstants_preview(const MyInstant& item) {
     if (g_preview_playing) return;
     g_preview_playing = true;
 
-    std::string temp_dir = get_temp_dir();
+    std::string temp_dir = get_preview_temp_dir();
     std::filesystem::create_directories(temp_dir);
 
     std::string safe = safe_filename(item.name);
@@ -192,33 +189,38 @@ void myinstants_preview(const MyInstant& item) {
         cli.set_connection_timeout(10);
         cli.set_read_timeout(30);
         cli.set_default_headers({
-            {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
         });
 
         auto res = cli.Get(path);
         if (!res || res->status != 200) { g_preview_playing = false; return; }
 
-        std::string mp3_path = temp_dir + "\\" + safe + ".mp3";
+        std::string mp3_path = temp_dir + "/" + safe + ".mp3";
         FILE* fp = fopen(mp3_path.c_str(), "wb");
         if (!fp) { g_preview_playing = false; return; }
         fwrite(res->body.data(), 1, res->body.size(), fp);
         fclose(fp);
 
         // Convert to WAV
-        std::string wav_path = temp_dir + "\\" + safe + ".wav";
+        std::string wav_path = temp_dir + "/" + safe + ".wav";
         ffmpeg_convert_audio(mp3_path, wav_path);
 
-        // Play
+        // Play using system audio player
         g_preview_wav = wav_path;
+#ifdef _WIN32
         PlaySoundA(wav_path.c_str(), NULL, SND_FILENAME | SND_ASYNC);
+#else
+        // Try paplay (PulseAudio), then aplay (ALSA), then ffplay
+        std::string play_cmd = "paplay \"" + wav_path + "\" 2>/dev/null || aplay -q \"" + wav_path + "\" 2>/dev/null || ffplay -nodisp -autoexit -loglevel quiet \"" + wav_path + "\" 2>/dev/null &";
+        system(play_cmd.c_str());
+#endif
 
-        // Wait for playback to finish (estimate: file size / 176400 bytes/sec for 44.1kHz stereo 16-bit)
-        // Then clean up the MP3
-        Sleep(500);
-        DeleteFileA(mp3_path.c_str());
+        // Wait a bit then clean up the MP3
+        sleep_ms(500);
+        delete_file(mp3_path);
 
         // Auto-stop flag after a reasonable time
-        for (int i = 0; i < 30 && g_preview_playing; i++) Sleep(100);
+        for (int i = 0; i < 30 && g_preview_playing; i++) sleep_ms(100);
         g_preview_playing = false;
     }).detach();
 }

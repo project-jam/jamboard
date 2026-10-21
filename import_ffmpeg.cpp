@@ -1,9 +1,9 @@
 #include "import_ffmpeg.h"
+#include "platform.h"
 #include <cstdio>
 #include <cstdint>
 #include <vector>
 #include <cstring>
-#include <windows.h>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -17,12 +17,19 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#ifdef _WIN32
 static FILE* fopen_utf8(const char* path, const char* mode) {
     wchar_t wpath[MAX_PATH], wmode[16];
     if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH) == 0) return fopen(path, mode);
     if (MultiByteToWideChar(CP_UTF8, 0, mode, -1, wmode, 16) == 0) return fopen(path, mode);
     return _wfopen(wpath, wmode);
 }
+#else
+// On Linux/macOS, fopen handles UTF-8 natively
+static FILE* fopen_utf8(const char* path, const char* mode) {
+    return fopen(path, mode);
+}
+#endif
 
 static bool write_wav(const char* path, const uint8_t* data, size_t data_size, int sample_rate, int channels, int bits_per_sample)
 {

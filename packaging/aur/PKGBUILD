@@ -1,0 +1,29 @@
+# Maintainer: Project Jam <project-jam@users.noreply.github.com>
+pkgname=jamboard-bin
+_pkgname=jamboard
+pkgver=4.2
+pkgrel=1
+pkgdesc="A soundboard for streamers - plays audio to your speakers and virtual microphone"
+arch=('x86_64')
+url="https://github.com/project-jam/jamboard"
+license=('MIT')
+depends=('glibc' 'yt-dlp')
+optdepends=(
+  'zenity: native file picker'
+  'pavucontrol: audio device mixer'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+options=('!strip' '!emptydirs')
+source=("$_pkgname-$pkgver-linux-x86_64.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  install -Dm755 "$srcdir/$_pkgname-$pkgver/jamboard" "$pkgdir/usr/bin/jamboard"
+  install -Dm644 "$srcdir/$_pkgname-$pkgver/jamboard.desktop" \
+    "$pkgdir/usr/share/applications/jamboard.desktop"
+  install -Dm644 "$srcdir/$_pkgname-$pkgver/jamboard.svg" \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/jamboard.svg"
+  install -Dm644 "$srcdir/$_pkgname-$pkgver/zpix.ttf" \
+    "$pkgdir/usr/share/jamboard/zpix.ttf"
+}

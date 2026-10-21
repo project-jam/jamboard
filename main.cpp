@@ -11,6 +11,7 @@
 #include "ui.h"
 #include "import.h"
 #include "update_checker.h"
+#include "platform.h"
 
 #include <iostream>
 #include <vector>
@@ -37,7 +38,7 @@ int main() {
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
         if (ec) return false;
-        std::string test = dir + "\\__w_test";
+        std::string test = dir + "/__w_test";
         std::ofstream tf(test);
         if (!tf.is_open()) return false;
         tf.close();
@@ -47,20 +48,29 @@ int main() {
     if (!writable("sounds")) {
         char* appdata = getenv("APPDATA");
         if (appdata) {
-            std::string dir = std::string(appdata) + "\\JamBoard";
-            std::filesystem::create_directories(dir + "\\sounds");
+            std::string dir = std::string(appdata) + "/JamBoard";
+            std::filesystem::create_directories(dir + "/sounds");
             std::filesystem::current_path(dir);
             program_files_mode = true;
         }
     }
 #endif
 
+    // Resolve where config.json and sounds/ live before anything reads them.
+    app_data_dir() = resolve_app_data_dir();
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(app_data_dir() + "/sounds", ec);
+    }
+
     if (!init_audio_system()) return -1;
 
-    start_update_checker();
-
-    load_sounds("sounds");
+    load_sounds(app_data_dir() + "/sounds");
     load_config_from_json();
+
+    // Started after the config is loaded so the update check setting
+    // is respected.
+    start_update_checker();
     if (!setup_audio_routing()) {
         std::cerr << "FATAL: No audio output engines initialized. Sound will not play." << std::endl;
     }
@@ -88,9 +98,26 @@ int main() {
     font_cfg.OversampleH = 1;
     font_cfg.OversampleV = 1;
     font_cfg.PixelSnapH = true;
-    char exe_buf[MAX_PATH];
-    GetModuleFileNameA(NULL, exe_buf, MAX_PATH);
-    std::string font_path = std::filesystem::path(exe_buf).parent_path().string() + "\\zpix.ttf";
+    // Primary pixel font. It ships next to the executable for portable
+    // installs and in the system data dir for distro packages.
+    std::string exe_dir = get_exe_dir();
+    std::string font_path;
+    {
+        static const char* font_candidates[] = {
+            "",                                  // filled in below: exe dir
+            "/usr/share/jamboard/zpix.ttf",
+            "/usr/local/share/jamboard/zpix.ttf"
+        };
+        font_path = exe_dir + "/zpix.ttf";
+        if (!file_exists(font_path)) {
+            for (int i = 1; i < 3; i++) {
+                if (file_exists(font_candidates[i])) {
+                    font_path = font_candidates[i];
+                    break;
+                }
+            }
+        }
+    }
     static const ImWchar ranges[] = {
         0x0020, 0x00FF, // Basic Latin + Latin Supplement
         0x2000, 0x206F, // General Punctuation
@@ -107,7 +134,12 @@ int main() {
         0x2030, 0x205E, // General Punctuation (per mille, etc.)
         0, 0
     };
-    io.Fonts->AddFontFromFileTTF(font_path.c_str(), 12.0f, &font_cfg, ranges);
+    if (file_exists(font_path)) {
+        io.Fonts->AddFontFromFileTTF(font_path.c_str(), 12.0f, &font_cfg, ranges);
+    }
+    // The pixel font is the primary face; if it is missing entirely the
+    // system fallback below becomes the main font instead.
+    bool have_primary_font = file_exists(font_path);
 
     // Load system fallback font for glyphs zpix doesn't cover (Cyrillic, Arabic, Thai, etc.)
     {
@@ -129,7 +161,7 @@ int main() {
 #endif
         if (fallback_path && std::filesystem::exists(fallback_path)) {
             ImFontConfig fallback_cfg;
-            fallback_cfg.MergeMode = true;
+            fallback_cfg.MergeMode = have_primary_font;
             fallback_cfg.PixelSnapH = true;
             fallback_cfg.OversampleH = 1;
             fallback_cfg.OversampleV = 1;

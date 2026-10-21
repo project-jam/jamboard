@@ -38,6 +38,17 @@ bool mic_muted = false;
 bool virtual_muted = false;
 bool deafen = false;
 bool program_files_mode = false;
+std::vector<Acronym> acronyms;
+bool acronym_case_sensitive = false;
+bool trigger_case_sensitive = false;
+// Linux packages are updated by the package manager, so the in app
+// update check starts disabled there. Windows self updates, so it
+// starts enabled.
+#ifdef _WIN32
+bool update_check_enabled = true;
+#else
+bool update_check_enabled = false;
+#endif
 bool scrub_enabled = false;
 bool mic_passthrough_enabled = false;
 int vis_fps_mode = 0; // 0 = auto, 1 = manual

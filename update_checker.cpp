@@ -1,13 +1,15 @@
 #include "update_checker.h"
 #include "httplib.h"
 #include "json.hpp"
+#include "platform.h"
+#include "data_models.h"
 #include <thread>
 #include <atomic>
 #include <chrono>
 #include <string>
 #include <cstdio>
 #include <fstream>
-#include <windows.h>
+#include <sys/stat.h>
 
 using json = nlohmann::json;
 
@@ -89,12 +91,12 @@ static bool download_file(const std::string& host, const std::string& path, cons
     fwrite(res->body.data(), 1, res->body.size(), fp);
     fclose(fp);
 
-    HANDLE hFile = CreateFileA(out_path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
-        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) return false;
-    DWORD size = GetFileSize(hFile, NULL);
-    CloseHandle(hFile);
-    if (size < 1024 * 1024) { DeleteFileA(out_path.c_str()); return false; }
+    // Check file size — reject if too small (probably an error page)
+    struct stat st;
+    if (stat(out_path.c_str(), &st) != 0 || st.st_size < 1024 * 1024) {
+        delete_file(out_path);
+        return false;
+    }
     return true;
 }
 
@@ -102,6 +104,9 @@ static bool is_newer_version(const std::string& tag) {
     auto parse = [](const std::string& v) -> int {
         std::string s = v;
         if (s.size() > 0 && (s[0] == 'v' || s[0] == 'V')) s = s.substr(1);
+        // Ignore pre-release suffixes such as "-beta1" or "-rc2".
+        size_t dash = s.find_first_of("-+ ");
+        if (dash != std::string::npos) s = s.substr(0, dash);
         int major = 0, minor = 0, patch = 0;
         sscanf(s.c_str(), "%d.%d.%d", &major, &minor, &patch);
         return major * 10000 + minor * 100 + patch;
@@ -128,7 +133,11 @@ static void check_impl() {
         if (j.contains("assets") && j["assets"].is_array()) {
             for (auto& asset : j["assets"]) {
                 std::string name = asset.value("name", "");
+#ifdef _WIN32
                 if (name.find("Setup") != std::string::npos || name.find(".exe") != std::string::npos) {
+#else
+                if (name.find("linux") != std::string::npos || name.find("Linux") != std::string::npos) {
+#endif
                     download_url = asset.value("browser_download_url", "");
                     break;
                 }
@@ -148,14 +157,29 @@ static void check_impl() {
 
 static void check_thread() {
     while (g_checker_running) {
+        if (!update_check_enabled) {
+            g_update_check_status = "Update checks are disabled";
+            g_checker_running = false;
+            break;
+        }
         check_impl();
-        for (int i = 0; i < 600 && g_checker_running; i++)
+        // Re-check every 6 hours. The app is version locked to the build it
+        // was shipped as, so there is no need to poll GitHub constantly.
+        for (int i = 0; i < 6 * 60 * 60 && g_checker_running; i++) {
+            if (!update_check_enabled) break;
             std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
     }
 }
 
 void start_update_checker() {
     if (g_checker_running) return;
+    // Distro packages are updated by the package manager, so the automatic
+    // check can be switched off entirely in the settings.
+    if (!update_check_enabled) {
+        g_update_check_status = "Update checks are disabled";
+        return;
+    }
     g_checker_running = true;
     std::thread(check_thread).detach();
 }
@@ -166,6 +190,14 @@ void check_for_updates() {
 
 void download_and_install() {
     if (g_download_url.empty()) return;
+
+    // On Linux the app is normally installed from a package, so replacing
+    // the binary behind the package manager would break it. Point the user
+    // at the release page instead.
+#ifndef _WIN32
+    if (!g_update_url.empty()) open_with_system(g_update_url);
+    return;
+#else
 
     std::string host = "github.com";
     std::string path = g_download_url;
@@ -179,24 +211,19 @@ void download_and_install() {
         }
     }
 
-    char temp_path[MAX_PATH];
-    GetTempPathA(MAX_PATH, temp_path);
-    std::string installer_path = std::string(temp_path) + "JamBoard_Setup.exe";
+    std::string installer_path = get_temp_dir() + "/JamBoard_update";
+    installer_path += ".exe";
 
     g_download_progress = true;
     std::thread([host, path, installer_path]() {
         bool ok = download_file(host, path, installer_path);
         g_download_progress = false;
         if (ok) {
-            SHELLEXECUTEINFOA sei = { sizeof(sei) };
-            sei.lpVerb = "runas";
-            sei.lpFile = installer_path.c_str();
-            sei.lpParameters = "/SILENT /SUPPRESSMSGBOXES /NORESTART";
-            sei.nShow = SW_SHOWNORMAL;
-            ShellExecuteExA(&sei);
+            open_with_system(installer_path);
             // Wait for installer to start, then exit
-            Sleep(3000);
+            sleep_ms(3000);
             ExitProcess(0);
         }
     }).detach();
+#endif
 }

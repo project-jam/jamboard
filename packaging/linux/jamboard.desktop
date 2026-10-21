@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=JamBoard
+GenericName=Soundboard
+Comment=Play sounds to your speakers and virtual microphone
+Exec=jamboard
+Icon=jamboard
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+Keywords=soundboard;soundboard;tts;text to speech;discord;obs;stream;streamer;multimedia;
+StartupNotify=true
+StartupWMClass=JamBoard

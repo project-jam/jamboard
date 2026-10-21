@@ -37,6 +37,11 @@ void set_deafen(bool on);
 void set_virtual_muted(bool on);
 void delete_sound(Sound* sound);
 void rename_sound(Sound* sound, const std::string& new_name);
+void play_temp_sound(const std::string& path);
+// Finds the sound whose voice trigger appears in the text. Returns
+// nullptr when no trigger matches.
+Sound* find_voice_trigger_sound(const std::string& text);
+void play_temp_sound_speakers_only(const std::string& path);
 
 void create_folder(const std::string& name);
 void delete_folder(const std::string& folder_path);

@@ -1,11 +1,12 @@
 #include "import.h"
 #include "import_ffmpeg.h"
 #include "data_models.h"
+#include "platform.h"
 #include <filesystem>
 #include <thread>
 #include <algorithm>
-#include <windows.h>
 
+#ifdef _WIN32
 static std::filesystem::path utf8_to_path(const std::string& utf8) {
     wchar_t wide[MAX_PATH];
     int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, wide, MAX_PATH);
@@ -21,75 +22,92 @@ static std::string path_to_utf8(const std::filesystem::path& p) {
     WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &result[0], len, NULL, NULL);
     return result;
 }
+#else
+static std::filesystem::path utf8_to_path(const std::string& utf8) { return std::filesystem::path(utf8); }
+static std::string path_to_utf8(const std::filesystem::path& p) { return p.string(); }
+#endif
 
 void convert_media(const std::string& path)
 {
     std::string stem = path_to_utf8(std::filesystem::path(path).stem());
-    ffmpeg_convert_audio(path, "sounds/" + stem + ".wav");
-    ffmpeg_extract_thumbnail(path, "sounds/" + stem + ".ppm");
+    std::string root = app_data_dir().empty() ? std::string(".") : app_data_dir();
+    std::string sounds = root + "/sounds";
+    std::error_code ec;
+    std::filesystem::create_directories(sounds, ec);
+    ffmpeg_convert_audio(path, sounds + "/" + stem + ".wav");
+    ffmpeg_extract_thumbnail(path, sounds + "/" + stem + ".ppm");
 }
 
-static bool run_process(const std::string& cmd) {
-    STARTUPINFOA si = { sizeof(si) };
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    PROCESS_INFORMATION pi = {};
-    std::string cmd_copy = cmd;
-    if (!CreateProcessA(NULL, &cmd_copy[0], NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
-        return false;
-    WaitForSingleObject(pi.hProcess, 300000);
-    DWORD exit_code = 0;
-    GetExitCodeProcess(pi.hProcess, &exit_code);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    return exit_code == 0;
-}
-
-static std::string get_data_dir() {
+static std::string get_import_data_dir() {
     if (program_files_mode) {
-        char* appdata = getenv("APPDATA");
-        if (appdata) return std::string(appdata) + "\\JamBoard";
+        return ::get_data_dir();
     }
-    // Resolve to absolute path so output dirs work regardless of CWD
-    char buf[MAX_PATH];
-    GetFullPathNameA(".", MAX_PATH, buf, NULL);
-    return buf;
+    if (!app_data_dir().empty()) {
+        return app_data_dir();
+    }
+    return get_cwd();
 }
 
-static bool ytdlp_exists() {
-    char buf[MAX_PATH];
-    GetModuleFileNameA(NULL, buf, MAX_PATH);
-    std::string exe_dir = std::filesystem::path(buf).parent_path().string();
-    std::string path = exe_dir + "\\yt-dlp.exe";
-    return GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+// Locate the yt-dlp executable.
+// Priority: $JAMBOARD_YTDLP -> bundled next to the app -> system $PATH.
+// The $PATH lookup lets distro packages depend on the system yt-dlp
+// instead of shipping a second copy.
+static std::string find_ytdlp() {
+    if (const char* env = getenv("JAMBOARD_YTDLP")) {
+        if (env[0] && file_exists(env)) return env;
+    }
+
+    std::string exe_dir = get_exe_dir();
+#ifdef _WIN32
+    std::string bundled = exe_dir + "\\yt-dlp.exe";
+    if (file_exists(bundled)) return bundled;
+    std::string sys = find_in_path("yt-dlp");
+    if (!sys.empty()) return sys;
+    return "yt-dlp.exe";
+#else
+    std::string bundled = exe_dir + "/yt-dlp";
+    if (file_exists(bundled)) return bundled;
+    std::string sys = find_in_path("yt-dlp");
+    if (!sys.empty()) return sys;
+    return "yt-dlp";
+#endif
 }
 
 void download_from_url(const std::string& url, bool& out_success, std::string& out_error) {
     out_success = false;
     out_error.clear();
 
-    if (!ytdlp_exists()) {
+    std::string ytdlp = find_ytdlp();
+    if (ytdlp.empty() || !file_exists(ytdlp)) {
+#ifdef _WIN32
         out_error = "yt-dlp.exe not found. Run 'make deps' or reinstall JamBoard.";
+#else
+        out_error = "yt-dlp not found. Install it (e.g. 'sudo apt install yt-dlp') or run 'make deps'.";
+#endif
         return;
     }
 
-    char exe_buf[MAX_PATH];
-    GetModuleFileNameA(NULL, exe_buf, MAX_PATH);
-    std::string exe_dir = std::filesystem::path(exe_buf).parent_path().string();
-    std::string ytdlp = exe_dir + "\\yt-dlp.exe";
-    if (GetFileAttributesA(ytdlp.c_str()) == INVALID_FILE_ATTRIBUTES)
-        ytdlp = "yt-dlp.exe";
-
-    std::string data_dir = get_data_dir();
+    std::string data_dir = get_import_data_dir();
+#ifdef _WIN32
     std::string tmp_dir = data_dir + "\\ytdlp_tmp";
     std::string sounds_dir = data_dir + "\\sounds";
+#else
+    std::string tmp_dir = data_dir + "/ytdlp_tmp";
+    std::string sounds_dir = data_dir + "/sounds";
+#endif
     std::filesystem::create_directories(tmp_dir);
     std::filesystem::create_directories(sounds_dir);
 
     // Download audio (native format, no ffmpeg.exe needed)
-    std::string audio_cmd = "\"" + ytdlp + "\" --quiet -f bestaudio --no-playlist -o \"" +
-        tmp_dir + "\\%(title)s.%(ext)s\" \"" + url + "\"";
-    if (!run_process(audio_cmd)) {
+    std::vector<std::string> ytdlp_args = {
+        ytdlp,
+        "--quiet",
+        "-f", "bestaudio",
+        "--no-playlist",
+        "-o", tmp_dir + "/%(title)s.%(ext)s",
+        url
+    };
+    if (run_process_args(ytdlp_args) != 0) {
         out_error = "yt-dlp audio download failed. Check URL or internet connection.";
         std::error_code ec;
         std::filesystem::remove_all(tmp_dir, ec);
@@ -102,7 +120,7 @@ void download_from_url(const std::string& url, bool& out_success, std::string& o
         auto ext = entry.path().extension().string();
         auto stem_u8 = path_to_utf8(entry.path().stem());
 
-        // Sanitize filename — remove characters illegal in Windows filenames
+        // Sanitize filename — remove characters illegal in filenames
         std::string safe_name;
         for (unsigned char c : stem_u8) {
             if (c == '<' || c == '>' || c == ':' || c == '"' || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*')
@@ -115,7 +133,7 @@ void download_from_url(const std::string& url, bool& out_success, std::string& o
         for (auto& c : lower_ext) c = (char)std::tolower(c);
 
         if (lower_ext == ".wav") {
-            std::filesystem::path dest = utf8_to_path(sounds_dir + "\\" + safe_name + ".wav");
+            std::filesystem::path dest = utf8_to_path(sounds_dir + "/" + safe_name + ".wav");
             std::error_code ec;
             std::filesystem::rename(entry.path(), dest, ec);
             if (ec) std::filesystem::copy_file(entry.path(), dest, std::filesystem::copy_options::overwrite_existing, ec);
@@ -123,15 +141,15 @@ void download_from_url(const std::string& url, bool& out_success, std::string& o
         else if (lower_ext == ".webm" || lower_ext == ".m4a" || lower_ext == ".opus" ||
                  lower_ext == ".mp3" || lower_ext == ".ogg" || lower_ext == ".flac") {
             // yt-dlp gave us a non-WAV audio — convert it
-            std::string tmp_audio = tmp_dir + "\\tmp_convert" + ext;
+            std::string tmp_audio = tmp_dir + "/tmp_convert" + ext;
             std::error_code ec;
             std::filesystem::rename(entry.path(), tmp_audio, ec);
             if (ec) { tmp_audio = path_to_utf8(entry.path()); }
-            ffmpeg_convert_audio(tmp_audio, sounds_dir + "\\" + safe_name + ".wav");
+            ffmpeg_convert_audio(tmp_audio, sounds_dir + "/" + safe_name + ".wav");
         }
         else if (lower_ext == ".jpg" || lower_ext == ".jpeg" || lower_ext == ".png" ||
                  lower_ext == ".ppm") {
-            std::filesystem::path dest = utf8_to_path(sounds_dir + "\\" + safe_name + ext);
+            std::filesystem::path dest = utf8_to_path(sounds_dir + "/" + safe_name + ext);
             std::error_code ec;
             if (lower_ext != ".ppm") {
                 std::filesystem::copy_file(entry.path(), dest, std::filesystem::copy_options::overwrite_existing, ec);
@@ -160,7 +178,10 @@ void handle_dropped_files(const std::vector<std::string>& paths)
             std::string lower = path;
             for (auto& c : lower) c = (char)std::tolower(c);
 
-            if (lower.ends_with(".mp3") || lower.ends_with(".wav") || lower.ends_with(".ogg"))
+            auto has_ext = [](const std::string& s, const std::string& ext) {
+                return s.size() >= ext.size() && s.compare(s.size() - ext.size(), ext.size(), ext) == 0;
+            };
+            if (has_ext(lower, ".mp3") || has_ext(lower, ".wav") || has_ext(lower, ".ogg"))
             {
                 std::filesystem::path dest = utf8_to_path(dest_dir + "/" + path_to_utf8(std::filesystem::path(path).filename()));
                 std::error_code ec;

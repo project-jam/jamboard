@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g. 4.2)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libglfw3-dev libgl1-mesa-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev \
+            libssl-dev zlib1g-dev \
+            devscripts debhelper fakeroot rpm \
+            curl ca-certificates
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        run: make VERSION=${{ steps.ver.outputs.value }} -j"$(nproc)"
+
+      - name: Build portable tarball
+        run: make VERSION=${{ steps.ver.outputs.value }} tarball
+
+      - name: Build .deb
+        run: make VERSION=${{ steps.ver.outputs.value }} deb
+
+      - name: Build .rpm
+        run: make VERSION=${{ steps.ver.outputs.value }} rpm
+
+      - name: Stage AUR package
+        run: make VERSION=${{ steps.ver.outputs.value }} aur
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jamboard-linux
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
+            dist/aur/
+
+  windows:
+    name: Windows (x86_64)
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: >-
+            base-devel
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-glfw
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            ffmpeg
+            yt-dlp
+
+      - name: Build
+        run: make -j"$(nproc)"
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp jamboard.exe dist/
+          cp *.dll dist/ 2>/dev/null || true
+          cp yt-dlp.exe dist/ 2>/dev/null || true
+          cd dist && zip -r ../jamboard-windows-x86_64.zip .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jamboard-windows
+          path: dist/*
+
+  release:
+    name: Publish release
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect release files
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' -o -name '*.zip' \) \
+            -exec cp {} release/ \;
+          ls -la release/
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

@@ -1,0 +1,38 @@
+Source: jamboard
+Section: sound
+Priority: optional
+Maintainer: Project Jam <project-jam@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), pkg-config
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://github.com/project-jam/jamboard
+
+Package: jamboard
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends},
+ yt-dlp,
+ libglfw3,
+ libgl1,
+ libglx-mesa0,
+ libx11-6,
+ libxrandr2,
+ libxinerama1,
+ libxcursor1,
+ libxi6,
+ libavformat59 | libavformat62,
+ libavcodec61 | libavcodec62,
+ libavutil59 | libavutil60,
+ libswresample4 | libswresample6,
+ libswscale7 | libswscale9,
+ libssl3,
+ zlib1g
+Recommends: zenity
+Suggests: pavucontrol, wireplumber
+Description: JamBoard - a soundboard for streamers
+ JamBoard is a cross platform soundboard. It plays audio clips to your
+ speakers and to a virtual microphone so they show up in Discord, OBS
+ or any other voice chat application.
+ .
+ It includes a text to speech engine based on Microsoft Edge neural
+ voices, a URL importer that uses yt-dlp, an effects rack, and
+ hardware routing for speaker, microphone and virtual device.

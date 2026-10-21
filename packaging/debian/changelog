@@ -1,0 +1,6 @@
+jamboard (4.2) unstable; urgency=medium
+
+  * Initial Linux packaging.
+  * Text to speech now uses the Sec-MS-GEC v2 token.
+
+ -- Project Jam <project-jam@users.noreply.github.com>  Tue, 21 Oct 2026 12:00:00 +0000

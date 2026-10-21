@@ -184,6 +184,17 @@ struct SoundFxChain {
 
 enum ClipboardType { CLIP_NONE, CLIP_SOUND, CLIP_FOLDER };
 
+// A text abbreviation that is expanded before the text is spoken.
+// "btw" becomes "by the way". Entries with blocked set are never
+// expanded, which is how words like "nvm" are kept as they are.
+struct Acronym {
+    std::string acronym;
+    std::string expansion;
+    std::string group;
+    bool enabled = true;
+    bool blocked = false;
+};
+
 struct Sound {
     std::string name;
     std::string path;
@@ -204,6 +215,8 @@ struct Sound {
 
     int hotkey = -1;
     std::string web_url;
+    // Word that triggers this sound when it shows up in the TTS box.
+    std::string voice_trigger;
 
     ma_decoder vis_decoder;
     bool vis_ready = false;
@@ -242,6 +255,14 @@ extern bool program_files_mode;
 extern bool scrub_enabled;
 extern bool mic_passthrough_enabled;
 extern int vis_fps_mode;
+// When false the app never contacts GitHub for release information.
+extern bool update_check_enabled;
+// Text abbreviations expanded before the TTS speaks the text.
+extern std::vector<Acronym> acronyms;
+// When set, only acronyms spelled with the same capitalisation match.
+extern bool acronym_case_sensitive;
+// When set, a voice trigger only matches the exact capitalisation.
+extern bool trigger_case_sensitive;
 extern int vis_fps;
 
 extern std::string current_folder;

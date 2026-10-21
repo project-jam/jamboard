@@ -96,11 +96,12 @@ jobs:
           make deps
 
       - name: Build the installer
+        shell: pwsh
         run: |
           choco install innosetup --no-progress --limit-output -y
-          cd install
+          Set-Location install
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" setup.iss
-          cd ..
+          if (-not (Test-Path JamBoard_Setup.exe)) { throw "the installer was not built" }
 
       - name: Package
         run: |

@@ -138,12 +138,15 @@ jobs:
       - name: Collect release files
         run: |
           mkdir -p release
-          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' -o -name '*.zip' \) \
+          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' -o -name '*.zip' -o -name '*.exe' \) \
             -exec cp {} release/ \;
           ls -la release/
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
+          name: ${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
+          body: |
+            fixed the yt-dlp, linux released, fixed tts, added an acronym tts and yh, arm64 coming soon
           files: release/*
           generate_release_notes: true

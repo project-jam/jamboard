@@ -1,5 +1,5 @@
 %global appname    jamboard
-%global appversion 4.2
+%global appversion 4.3
 
 Name:           %{appname}
 Version:        %{appversion}
@@ -59,6 +59,6 @@ install -Dm644 zpix.ttf %{buildroot}%{_datadir}/jamboard/zpix.ttf
 %{_datadir}/icons/hicolor/scalable/apps/%{appname}.svg
 
 %changelog
-* Wed Oct 21 2026 Project Jam <project-jam@users.noreply.github.com> - 4.2-1
-- Initial Linux RPM packaging
-- Text to speech now uses the Sec-MS-GEC v2 token
+* Wed Oct 21 2026 Project Jam <project-jam@users.noreply.github.com> - 4.3-1
+- Fixed the yt-dlp lookup
+- Text to speech now uses the Sec-MS-GEC v2 token and expands acronyms

@@ -1,7 +1,7 @@
 # Maintainer: Project Jam <project-jam@users.noreply.github.com>
 pkgname=jamboard-bin
 _pkgname=jamboard
-pkgver=4.2
+pkgver=4.3
 pkgrel=1
 pkgdesc="A soundboard for streamers - plays audio to your speakers and virtual microphone"
 arch=('x86_64')

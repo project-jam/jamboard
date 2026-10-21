@@ -81,15 +81,18 @@ jobs:
           msystem: UCRT64
           install: >-
             base-devel
+            curl
             mingw-w64-ucrt-x86_64-toolchain
             mingw-w64-ucrt-x86_64-glfw
+            mingw-w64-ucrt-x86_64-ffmpeg
+            mingw-w64-ucrt-x86_64-openssl
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
-            ffmpeg
-            yt-dlp
 
       - name: Build
-        run: make -j"$(nproc)"
+        run: |
+          make -j"$(nproc)"
+          make deps
 
       - name: Package
         run: |
